@@ -301,6 +301,25 @@ class _StarManager:
         return self._context.get_all_stars()
 
 
+class _NullEventQueue:
+    """`Context.get_event_queue()` 的安全替身：只记日志的空队列。"""
+
+    def put_nowait(self, item: Any) -> None:
+        logger.info(
+            "[垫片] 插件向事件队列投递了 %r，宿主无平台事件循环，已丢弃",
+            type(item).__name__,
+        )
+
+    def put(self, item: Any) -> None:  # 同步兼容
+        self.put_nowait(item)
+
+    def qsize(self) -> int:
+        return 0
+
+    def empty(self) -> bool:
+        return True
+
+
 class _ProviderManagerView:
     """真 AstrBot `ProviderManager.inst_map` 查询路径的替身视图。
 
@@ -529,7 +548,12 @@ class Context:
         return None
 
     def get_event_queue(self) -> Any:
-        return None
+        """上游插件用事件队列投递合成事件（如主动搭话触发）。
+
+        返回一个只记日志的空队列：插件 put 不崩溃，投递内容被如实丢弃
+        （宿主没有平台事件循环，主动投递链路属于桥接管道职责）。
+        """
+        return _NullEventQueue()
 
     def get_platform(self, platform_type: Any = None) -> Any:  # noqa: ARG002
         return self.platform

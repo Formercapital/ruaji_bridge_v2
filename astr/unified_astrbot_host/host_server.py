@@ -70,6 +70,7 @@ from hermes_layer.dispatch import (
     run_handlers,
 )
 from hermes_layer.gateway_client import EndpointConfig
+from hermes_layer.plugin_pages import GenericPluginPages
 from hermes_layer.tool_registry import ToolRegistry
 from hermes_layer.web_services import PluginWebManager
 from runtime.config import DEFAULT_CONFIG_PATH, load_config
@@ -133,6 +134,9 @@ class HostServer:
         targets = events_cfg.get("dispatch_to") or list(DEFAULT_EVENT_TARGETS)
         self.event_targets = tuple(str(t) for t in targets)
 
+        # 插件原生页面的通用伺服层（/plug/{key}/page|assets|api，零插件名）。
+        # 必须先建再 build_app：路由注册发生在 _build_app 里。
+        self.plugin_pages = GenericPluginPages(unified)
         self.app = self._build_app()
         self._runner: web.AppRunner | None = None
         self.web_manager = PluginWebManager(unified)
@@ -165,6 +169,8 @@ class HostServer:
                 web.post("/api/v1/memes/settings", self.handle_memes_settings_update),
             ]
         )
+        # 插件原生页面：/plug/{key}/page|assets|api（hermes_layer/plugin_pages.py）
+        self.plugin_pages.register(app)
         return app
 
     async def handle_index(self, request: web.Request) -> web.Response:  # noqa: ARG002
@@ -512,6 +518,12 @@ class HostServer:
             },
         ]
         
+        # 通用页面层：有 pages/ 目录或注册了 web api 的挂载插件（/plug/{key}/page）
+        existing_ids = {item["id"] for item in pages}
+        for entry in self.plugin_pages.nav_entries():
+            if entry["id"] not in existing_ids:
+                pages.append(entry)
+
         # 动态扫描未来新插件注册的页面
         registered_custom = getattr(self.unified.context, "registered_web_pages", [])
         for p in registered_custom:

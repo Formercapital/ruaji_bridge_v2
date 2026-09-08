@@ -83,4 +83,27 @@ class Message(BaseModel):
         return ""
 
 
-__all__ = ["ContentPart", "ImageURLPart", "Message", "TextPart", "ThinkPart"]
+def is_checkpoint_message(message: Any) -> bool:
+    """上游用于识别"检查点消息"（记忆整合边界）。
+
+    统一宿主的会话历史没有 checkpoint 概念，恒为 False —— 上游插件
+    （如 Favour_Ultra 的主动搭话历史读取）用它过滤，全部保留即可。
+    """
+    _ = message
+    return False
+
+
+def bind_checkpoint_messages(messages: list[Any]) -> list[Any]:
+    """上游把历史消息绑定到检查点；垫片原样返回。"""
+    return messages
+
+
+__all__ = [
+    "ContentPart",
+    "ImageURLPart",
+    "Message",
+    "TextPart",
+    "ThinkPart",
+    "bind_checkpoint_messages",
+    "is_checkpoint_message",
+]

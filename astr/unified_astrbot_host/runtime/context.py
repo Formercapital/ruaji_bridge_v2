@@ -73,6 +73,17 @@ class UnifiedContext:
         rebind_data_root(data_root)
         self.data_root = data_root
 
+        # AstrBot 框架配置兼容键：插件按 AstrBot 惯例从
+        # context.get_config() 读这三个键（admins_id / data / plugin.data_dir）。
+        # admins_id 对应 AstrBot 的 superuser 体系，这里直接桥到宿主
+        # identity.owner_id（唯一主人来源）；data/plugin.data_dir 是插件
+        # 落数据目录的标准入口。属于框架语义补全，不含任何插件名。
+        _identity = config.get("identity") or {}
+        _owner_id = str(_identity.get("owner_id") or "")
+        config.setdefault("admins_id", [_owner_id] if _owner_id else [])
+        config.setdefault("data", data_root)
+        config.setdefault("plugin.data_dir", data_root)
+
         self.gateway: GatewayClient = build_from_config(config)
         self.context = Context(config=config, data_dir=data_root)
         self.context.unified = self
@@ -281,8 +292,13 @@ class UnifiedContext:
         logger.warning("插件 %s 在 %.0fs 内未完成异步初始化", mount.name, timeout_s)
 
     async def _setup_adapters(self) -> None:
-        """根据已挂载的插件，实例化并初始化对应的适配器。"""
-        from hermes_layer.adapters import LivingMemoryAdapter, GroupChatPlusAdapter
+        """装配适配器：专属适配器 + 通用适配器。
+
+        专属适配器覆盖需要宿主侧定制行为的插件（LM / GCP）。剩下的挂载
+        插件只要注册了 on_llm_request 钩子，就自动挂 GenericPluginAdapter
+        —— 新插件接入从此只是 config.yaml 一段声明，宿主零改动。
+        """
+        from hermes_layer.adapters import GenericPluginAdapter, GroupChatPlusAdapter, LivingMemoryAdapter
 
         _adapter_map: dict[str, type[UnifiedPluginContract]] = {
             "living_memory": LivingMemoryAdapter,
@@ -300,7 +316,33 @@ class UnifiedContext:
                 logger.info("适配器 %s (%s) 就绪", adapter.plugin_key, type(adapter).__name__)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("适配器 %s 初始化失败: %s", key, exc)
+
+        # 通用适配器：没有专属适配器、但注册了 on_llm_request 的插件
+        covered = {a.plugin_key for a in adapters}
+        for key in self.mounts:
+            if key in covered:
+                continue
+            if not self._has_llm_request_handlers(key):
+                continue
+            adapter = GenericPluginAdapter(self, key)
+            try:
+                config = (self.config.get("plugins") or {}).get(key, {})
+                await adapter.initialize(self.context, config)
+                adapters.append(adapter)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("通用适配器 %s 初始化失败: %s", key, exc)
+
         self.adapters = sorted(adapters, key=lambda a: a.execution_order)
+
+    def _has_llm_request_handlers(self, key: str) -> bool:
+        from astrbot.core.star.star_handler import EventType, star_handlers_registry
+
+        from hermes_layer.dispatch import resolve_owner
+
+        return any(
+            resolve_owner(h, self.mounts) == key
+            for h in star_handlers_registry.get_handlers_by_event_type(EventType.OnLLMRequestEvent)
+        )
 
     # ------------------------------------------------------------------
     # 查询
