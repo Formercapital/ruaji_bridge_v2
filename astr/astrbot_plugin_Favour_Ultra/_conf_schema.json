@@ -1,0 +1,168 @@
+{
+  "_upgrade_notice": {
+    "description": "版本升级通知",
+    "type": "text",
+    "default": "本插件已升级至新版！所有配置已迁移至 WebUI 的「插件管理 → 插件详情 → Pages → 配置中心」。当前页面（旧版配置）仅用于数据迁移，修改无效。请前往 Pages 配置中心进行所有设置。",
+    "obvious_hint": true,
+    "hint": "本字段仅供展示，修改不会生效。"
+  },
+  "_rollback_url": {
+    "description": "旧版回退地址（如新版运行出错可手动安装旧版）",
+    "type": "string",
+    "default": "https://github.com/nuomicici/astrbot_plugin_Favour_Ultra/tree/older",
+    "obvious_hint": true,
+    "hint": "如果新版插件出现错误，可以前往此 GitHub 分支下载旧版本手动回退。删除新版本点击插件页面右下角加号安装即可。"
+  },
+   "_up_notice": {
+    "description": "配置文件目录",
+    "type": "text",
+    "default": "配置文件保存于\"/data/plugin_data/astrbot_plugin_favour_ultra/\"，默认配置位于\"data/plugins/astrbot_plugin_Favour_Ultra/config_manager.py\"",
+    "obvious_hint": true,
+    "hint": "旧版本分级规则失效，请务必前往配置页查看是否需要更改！"
+  },
+  "favour_mode": {
+    "description": "【旧版迁移兼容】好感度判定模式 — 此页面仅供迁移数据，修改无效",
+    "type": "string",
+    "default": "galgame",
+    "options": ["galgame", "realistic"],
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。实际配置请前往「插件管理 → 插件详情 → Pages → 配置中心」。"
+  },
+  "is_global_favour": {
+    "description": "【旧版迁移兼容】全局好感度 — 此页面仅供迁移数据，修改无效",
+    "type": "bool",
+    "default": false,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "group_sort_by": {
+    "description": "【旧版迁移兼容】排序方式 — 此页面仅供迁移数据，修改无效",
+    "type": "string",
+    "default": "default",
+    "options": ["default", "favour", "nickname", "userid"],
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "enable_cold_violence": {
+    "description": "【旧版迁移兼容】启用冷暴力 — 此页面仅供迁移数据，修改无效",
+    "type": "bool",
+    "default": true,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "enable_relationship_table": {
+    "description": "【旧版迁移兼容】注入关系表 — 此页面仅供迁移数据，修改无效",
+    "type": "bool",
+    "default": true,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "min_favour_value": {
+    "description": "【旧版迁移兼容】好感度下限 — 此页面仅供迁移数据，修改无效",
+    "type": "int",
+    "default": -100,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "max_favour_value": {
+    "description": "【旧版迁移兼容】好感度上限 — 此页面仅供迁移数据，修改无效",
+    "type": "int",
+    "default": 100,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "default_favour": {
+    "description": "【旧版迁移兼容】初始好感度 — 此页面仅供迁移数据，修改无效",
+    "type": "int",
+    "default": 0,
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。"
+  },
+  "advanced_config": {
+    "description": "【旧版迁移兼容】高级配置 — 此页面仅供迁移数据，修改无效",
+    "type": "object",
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。",
+    "items": {
+      "admin_default_favour": {
+        "description": "【旧版迁移兼容】管理员初始好感度",
+        "type": "int",
+        "default": 50
+      },
+      "favour_envoys": {
+        "description": "【旧版迁移兼容】好感度特使ID列表",
+        "type": "list",
+        "default": []
+      },
+      "favour_increase_min": {
+        "description": "【旧版迁移兼容】上升最小值",
+        "type": "int",
+        "default": 1
+      },
+      "favour_increase_max": {
+        "description": "【旧版迁移兼容】上升最大值",
+        "type": "int",
+        "default": 3
+      },
+      "favour_decrease_min": {
+        "description": "【旧版迁移兼容】下降最小值",
+        "type": "int",
+        "default": 1
+      },
+      "favour_decrease_max": {
+        "description": "【旧版迁移兼容】下降最大值",
+        "type": "int",
+        "default": 5
+      },
+      "level_threshold": {
+        "description": "【旧版迁移兼容】群等级阈值",
+        "type": "int",
+        "default": 50
+      },
+      "blocked_sessions": {
+        "description": "【旧版迁移兼容】会话黑名单",
+        "type": "list",
+        "default": []
+      },
+      "allowed_sessions": {
+        "description": "【旧版迁移兼容】会话白名单",
+        "type": "list",
+        "default": []
+      }
+    }
+  },
+  "cold_violence_config": {
+    "description": "【旧版迁移兼容】冷暴力配置 — 此页面仅供迁移数据，修改无效",
+    "type": "object",
+    "hint": "⚠️ 旧版配置项，仅供插件升级时迁移使用。",
+    "items": {
+      "consecutive_decrease_threshold": {
+        "description": "【旧版迁移兼容】连续降低触发次数",
+        "type": "int",
+        "default": 3
+      },
+      "duration_minutes": {
+        "description": "【旧版迁移兼容】持续时间（分钟）",
+        "type": "int",
+        "default": 60
+      },
+      "is_global": {
+        "description": "【旧版迁移兼容】是否全局生效",
+        "type": "bool",
+        "default": false
+      },
+      "replies": {
+        "type": "object",
+        "description": "【旧版迁移兼容】自定义回复",
+        "items": {
+          "on_trigger": {
+            "type": "string",
+            "description": "【旧版迁移兼容】触发附加消息",
+            "default": "......（我不想理你了。）"
+          },
+          "on_message": {
+            "type": "string",
+            "description": "【旧版迁移兼容】拦截时回复",
+            "default": "[自动回复]不想理你,{time_str}后再找我"
+          },
+          "on_query": {
+            "type": "string",
+            "description": "【旧版迁移兼容】查询时回复",
+            "default": "冷暴力呢，看什么看，{time_str}之后再找我说话"
+          }
+        }
+      }
+    }
+  }
+}

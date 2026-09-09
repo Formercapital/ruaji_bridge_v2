@@ -52,7 +52,11 @@ const DEFAULTS = {
     truncateToChars: 50000,
     maxSendAgeMs: 600000,
     maxSendRetries: 10,
+    /** 模型完成事件的同步结算上限；超时只跳过本轮评分，不影响发送 */
+    settlementTimeoutMs: 8000,
   },
+  favourUltraEnabled: false,
+  legacyAffectionEnabled: true,
   fastAck: { enabled: true, message: '收到，已派给编程/画师，弄好叫你~', patterns: [] },
   storage: {
     legacyRoot: '..',
@@ -138,7 +142,7 @@ const DEFAULTS = {
     logMessageBodies: false,
   },
   pipelines: {
-    'response.transform': ['affection', 'media-extract', 'meme', 'strip-markdown', 'typing-delay'],
+    'response.transform': ['favour-tags', 'affection', 'media-extract', 'meme', 'strip-markdown', 'typing-delay'],
   },
   plugins: [],
 };

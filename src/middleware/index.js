@@ -10,6 +10,7 @@ import { createAffectionMiddleware } from './affection.js';
 import { createMemeMiddleware } from './meme.js';
 import { createStripMarkdownMiddleware } from './strip-markdown.js';
 import { createTypingDelayMiddleware } from './typing-delay.js';
+import { createFavourTagsMiddleware } from './favour-tags.js';
 import { createMediaExtractMiddleware } from './media-extract.js';
 import { createResultDecorateMiddleware } from './result-decorate.js';
 
@@ -31,6 +32,7 @@ export function buildMiddlewarePipeline(deps) {
   const pipeline = new MiddlewarePipeline({ logger });
 
   pipeline
+    .register('favour-tags', createFavourTagsMiddleware())
     .register('result-decorate', createResultDecorateMiddleware({ capabilityBus, logger }))
     .register(
       'affection',
@@ -55,6 +57,7 @@ export function buildMiddlewarePipeline(deps) {
     .register('typing-delay', createTypingDelayMiddleware({ config, logger }));
 
   const order = config.pipelines?.[RESPONSE_TRANSFORM] ?? [
+    'favour-tags',
     'affection',
     'result-decorate',
     'media-extract',

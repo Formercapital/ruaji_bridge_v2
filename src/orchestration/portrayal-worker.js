@@ -113,6 +113,8 @@ export class PortrayalWorker {
   constructor(opts = {}) {
     this.store = opts.portrayalStore;
     this.affection = opts.affectionStore ?? null;
+    /** Favour Ultra 权威数据；启用后画像与回复上下文读同一份状态 */
+    this.favour = opts.favourClient ?? null;
     this.models = opts.modelRouter;
     this.config = opts.config ?? {};
     this.log = opts.logger?.child({ component: 'portrayal-worker' }) ?? console;
@@ -210,13 +212,7 @@ export class PortrayalWorker {
   async analyzeProfileJson({ userId, nickname, messages, limit = DEFAULT_ANALYSIS_LIMIT }) {
     const userMsgs = this._collectMessages({ userId, nickname, messages, limit });
 
-    let affContextStr = '';
-    if (this.affection) {
-      const aff = this.affection.getContext(userId);
-      if (aff) {
-        affContextStr = `【瑞姬与该群友的关系现状】: 当前好感度 ${aff.affection}/90 (${aff.level}) | 关系: ${aff.relationship || aff.level}${aff.is_unique ? '★(独占)' : ''}\n`;
-      }
-    }
+    const affContextStr = await this._renderRelationContext(userId);
 
     let existingProfileContextStr = '';
     if (this.store) {
@@ -272,6 +268,30 @@ export class PortrayalWorker {
   }
 
   /**
+   * 关系现状注入。Favour Ultra 是权威源；宿主不可达或尚未启用时才回落旧存储，
+   * 保证画像里显示的刻度与命令/面板/回复上下文一致（不会新旧两套打架）。
+   */
+  async _renderRelationContext(userId) {
+    if (this.favour?.enabled) {
+      try {
+        const line = await this.favour.renderContextLine(userId);
+        if (line) return line;
+      } catch (err) {
+        this.log.debug?.('Favour 关系现状读取失败，本次画像不注入', { error: err.message });
+      }
+      return '';
+    }
+
+    if (this.affection) {
+      const aff = this.affection.getContext(userId);
+      if (aff) {
+        return `【瑞姬与该群友的关系现状】: 当前好感度 ${aff.affection}/90 (${aff.level}) | 关系: ${aff.relationship || aff.level}${aff.is_unique ? '★(独占)' : ''}\n`;
+      }
+    }
+    return '';
+  }
+
+  /**
    * 针对命令（如 /画像、/正画像等）直接执行专项分析
    * @param {object} params
    * @param {string} params.templateKey 'portrait' | 'positive' | 'negative' | 'clone' | 'match'
@@ -282,13 +302,7 @@ export class PortrayalWorker {
   async analyzeCommand({ templateKey, userId, nickname, messages, limit = DEFAULT_ANALYSIS_LIMIT }) {
     const userMsgs = this._collectMessages({ userId, nickname, messages, limit });
 
-    let affContextStr = '';
-    if (this.affection) {
-      const aff = this.affection.getContext(userId);
-      if (aff) {
-        affContextStr = `【瑞姬与该群友的关系现状】: 当前好感度 ${aff.affection}/90 (${aff.level}) | 关系: ${aff.relationship || aff.level}${aff.is_unique ? '★(独占)' : ''}\n`;
-      }
-    }
+    const affContextStr = await this._renderRelationContext(userId);
 
     let existingProfileContextStr = '';
     if (this.store) {

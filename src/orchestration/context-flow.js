@@ -149,10 +149,11 @@ export class ContextFlow {
       inbound,
     };
 
+
     const scope =
       inbound.messageType === MESSAGE_TYPES.GROUP ? CONTEXT_SCOPES.GROUP : CONTEXT_SCOPES.PRIVATE;
 
-    const { blocks, stats, dropped } = await this.aggregator.aggregate(input, {
+    const { blocks, stats, dropped, intercepted, reply } = await this.aggregator.aggregate(input, {
       correlationId: inbound.correlationId,
       sessionId: inbound.sessionId,
       signal: ctx.signal,
@@ -161,19 +162,26 @@ export class ContextFlow {
 
     this.log.debug('上下文聚合完成', { correlationId: inbound.correlationId, ...stats });
     this.trace?.recordContext(inbound.correlationId, { blocks, stats, dropped });
-    return { blocks, stats };
+    return { blocks, stats, intercepted, reply };
   }
 
   /**
    * 好感度与画像复合上下文。主人与主动接话都返回 null——
-   * 主人恒 100 不评估（附录 1），主动接话不构成与群友的互动。
+   * 主人恒满分不评估（附录 1），主动接话不构成与群友的互动。
+   *
+   * Favour Ultra 启用后，好感与关系由插件在宿主侧注入（评分规则 + 当前分数 +
+   * 关系 + 排他快照），桥接不再注入旧刻度的好感行——否则模型会同时看到
+   * 90 分制与 1000 分制两套数据。画像仍由桥接注入。
    */
   getAffectionContext(inbound, triggerType) {
     if (inbound.flags.isOwner) return null;
     if (triggerType === 'ai_decision') return null;
     try {
-      const aff = this.affection.getContext(inbound.userId);
       const port = this.portrayal ? this.portrayal.getCompactContext(inbound.userId) : '';
+      if (this.config.favourUltraEnabled) {
+        return port ? { portrayal: port, favourManagedByHost: true } : null;
+      }
+      const aff = this.affection.getContext(inbound.userId);
       return {
         ...aff,
         portrayal: port,

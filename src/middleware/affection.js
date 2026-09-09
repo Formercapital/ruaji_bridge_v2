@@ -68,6 +68,30 @@ export function createAffectionMiddleware({ store, identity, idempotency, logger
       // 只在"完整回复"这一轮做写入。流式分段只剥不写。
       if (!ctx.isFinalPass) return next(ctx);
 
+      // Legacy AFF is retained only as a shadow audit/safety net. It must
+      // never write the legacy store in live mode after Favour Ultra takeover.
+      if (config.favourUltraEnabled === true && config.legacyAffectionEnabled !== true) {
+        if (!config.reply.sideEffectsEnabled) {
+          const extracted = extractAffection(ctx.rawText ?? beforeStrip);
+          log.info('影子模式：好感度写入已抑制', {
+            correlationId: ctx.correlationId,
+            userId: ctx.inbound.userId,
+            delta: extracted?.delta ?? 0,
+            reason: extracted?.reason ?? 'legacy-affection-disabled',
+          });
+          if (extracted) {
+            ctx.suppressedSideEffects = ctx.suppressedSideEffects ?? [];
+            ctx.suppressedSideEffects.push({
+              kind: 'legacy-affection',
+              userId: ctx.inbound.userId,
+              delta: extracted.delta,
+              reason: extracted.reason,
+            });
+          }
+        }
+        return next(ctx);
+      }
+
       // 主人：恒 100，不评估、不写入
       if (isOwner) {
         if (beforeStrip !== ctx.text) {

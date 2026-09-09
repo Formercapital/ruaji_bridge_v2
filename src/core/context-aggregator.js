@@ -79,7 +79,15 @@ export class ContextAggregator {
       });
     }
 
-    return { blocks: pipeline.blocks, text: pipeline.text, stats, dropped: pipeline.dropped };
+    const interception = raw.find((b) => b?.metadata?.intercepted || b?.detail?.intercepted || b?.intercepted);
+    return {
+      blocks: pipeline.blocks,
+      text: pipeline.text,
+      stats,
+      dropped: pipeline.dropped,
+      intercepted: Boolean(interception),
+      reply: interception?.metadata?.reply ?? interception?.detail?.reply ?? interception?.reply ?? null,
+    };
   }
 
   async _collectRemote(input, ctx) {
@@ -90,6 +98,16 @@ export class ContextAggregator {
     });
     const out = [];
     for (const { providerId, priority, result } of results) {
+      if (result?.intercepted) {
+        out.push({
+          source: providerId,
+          capability: 'context.enrich',
+          priority: priority + 1000,
+          text: result.reply || '请求已被宿主拦截',
+          metadata: { intercepted: true, reply: result.reply || null },
+          scope: CONTEXT_SCOPES.ANY,
+        });
+      }
       out.push(
         ...coerceContextBlocks(result, {
           source: providerId,

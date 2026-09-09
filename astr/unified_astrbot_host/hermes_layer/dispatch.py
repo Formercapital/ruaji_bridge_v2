@@ -164,6 +164,7 @@ DISPATCH_TABLE: dict[EventType, EventDispatchSpec] = {
 _FALLBACK_MODULE_PREFIX = {
     "living_memory": "astrbot_plugin_livingmemory",
     "group_chat_plus": "astrbot_plugin_group_chat_plus",
+    "favour_ultra": "astrbot_plugin_Favour_Ultra",
 }
 
 

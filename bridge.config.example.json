@@ -146,7 +146,7 @@
   },
 
   "pipelines": {
-    "response.transform": ["affection", "result-decorate", "media-extract", "meme", "strip-markdown", "typing-delay"]
+    "response.transform": ["favour-tags", "affection", "media-extract", "meme", "strip-markdown", "typing-delay"]
   },
 
   "plugins": [

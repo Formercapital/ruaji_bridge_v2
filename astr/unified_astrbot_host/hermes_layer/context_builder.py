@@ -72,7 +72,7 @@ _PLATFORM = PlatformMetadata(
 )
 
 
-def build_event(message: InboundMessage, self_id: str = "") -> AstrMessageEvent:
+def build_event(message: InboundMessage, self_id: str = "", send_hook=None) -> AstrMessageEvent:
     """从 InboundMessage 造一个插件能用的 AstrMessageEvent。
 
     这是"影子模式"的关键面：事件的 send_hook 默认只打日志不投递
@@ -110,6 +110,7 @@ def build_event(message: InboundMessage, self_id: str = "") -> AstrMessageEvent:
         message_obj=msg,
         platform_meta=_PLATFORM,
         session_id=message.session_id,
+        send_hook=send_hook,
     )
     event.role = "admin" if message.role == "admin" else "member"
     # at_bot 就是唤醒。GCP 的多数分支读 is_at_or_wake_command 而不是自己解析消息链。
@@ -224,7 +225,14 @@ class ContextBuilder:
         radar_task = asyncio.create_task(self._meme_radar(message))
 
         # 派发 OnWaitingLLMRequestEvent
-        waiting_event = build_event(message, self_id=self_id)
+        sent_texts: list[str] = []
+
+        async def relay_send(_event, chain):
+            text = chain.get_plain_text().strip()
+            if text:
+                sent_texts.append(text)
+
+        waiting_event = build_event(message, self_id=self_id, send_hook=relay_send)
         waiting_req = build_request(message, history)
         waiting_handlers = star_handlers_registry.get_handlers_by_event_type(EventType.OnWaitingLLMRequestEvent)
         for wh in waiting_handlers:
@@ -289,6 +297,8 @@ class ContextBuilder:
             "tokensEstimate": sum(b.tokens_estimate for b in blocks),
             "elapsedMs": round((time.perf_counter() - started) * 1000, 2),
             "degraded": [b.source for b in blocks if b.error],
+            "intercepted": waiting_event.is_stopped(),
+            "reply": "\n".join(sent_texts) if sent_texts else None,
         }
 
     def _present(self, keys: tuple[str, ...]) -> list[str]:

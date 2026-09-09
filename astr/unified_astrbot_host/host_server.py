@@ -58,6 +58,7 @@ logging.basicConfig(
 from astrbot.core import logger
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageEventResult, ResultContentType
+from astrbot.core.utils.session_waiter import feed as feed_waiters
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 from hermes_layer.context_builder import ContextBuilder, build_event
 from hermes_layer.contracts import InboundMessage
@@ -219,7 +220,7 @@ class HostServer:
         if not message.text and not message.raw:
             return _json({"ok": False, "error": "empty_message"}, status=400)
 
-        dispatched_reports, cmd_results = await self._dispatch_event(message)
+        dispatched_reports, cmd_results, sent_texts = await self._dispatch_event(message)
         reply_texts = []
         for cr in cmd_results:
             if hasattr(cr, "get_plain_text"):
@@ -230,6 +231,8 @@ class HostServer:
                 t = "".join(getattr(c, "text", "") for c in cr.chain).strip()
                 if t:
                     reply_texts.append(t)
+
+        reply_texts.extend(t for t in sent_texts if t not in reply_texts)
 
         return _json(
             {
@@ -320,11 +323,14 @@ class HostServer:
         reports, _ = await run_handlers(event, handlers, mounts=self.unified.mounts, timeout_s=EVENT_TIMEOUT_S)
         return reports
 
-    async def _dispatch_event(self, message: InboundMessage) -> tuple[list[dict[str, Any]], list[MessageEventResult]]:
+    async def _dispatch_event(self, message: InboundMessage) -> tuple[list[dict[str, Any]], list[MessageEventResult], list[str]]:
         """把消息交给记忆/学习插件的消息处理器，并收集命令结果。"""
         self_id = str((self.unified.config.get("identity") or {}).get("robot_id") or "")
         out_reports: list[dict[str, Any]] = []
         all_cmd_results: list[MessageEventResult] = []
+        sent_texts: list[str] = []
+        waiter_event = build_event(message, self_id=self_id)
+        await feed_waiters(waiter_event)
 
         for key in self.event_targets:
             if key not in self.unified.mounts:
@@ -340,7 +346,12 @@ class HostServer:
                 out_reports.append(entry)
                 continue
 
-            event = build_event(message, self_id=self_id)
+            async def relay_send(_event, chain):
+                text = chain.get_plain_text().strip()
+                if text:
+                    sent_texts.append(text)
+
+            event = build_event(message, self_id=self_id, send_hook=relay_send)
             started = time.perf_counter()
             try:
                 reports, cmd_res = await run_handlers(
@@ -359,7 +370,7 @@ class HostServer:
             entry["stopped"] = bool(event.is_stopped())
             out_reports.append(entry)
 
-        return out_reports, all_cmd_results
+        return out_reports, all_cmd_results, sent_texts
 
     # ---------- result.decorate ----------
 
@@ -515,6 +526,16 @@ class HostServer:
                 "url": "http://127.0.0.1:8878/dashboard/",
                 "description": "原子记忆图谱、记忆整合与多路 RAG 检索大盘",
                 "enabled": "living_memory" in self.unified.mounts,
+            },
+            {
+                "id": "favour_ultra",
+                "title": "好感度",
+                "category": "relationship",
+                "icon": "heart",
+                "port": 0,
+                "url": "/plug/favour_ultra/page",
+                "description": "Favour Ultra 原生关系与数据管理页面",
+                "enabled": "favour_ultra" in self.unified.mounts,
             },
         ]
         

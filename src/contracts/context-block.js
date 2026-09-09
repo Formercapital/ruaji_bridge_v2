@@ -65,7 +65,12 @@ export function coerceContextBlocks(raw, defaults = {}) {
     }
     if (typeof item !== 'object') continue;
     const text = typeof item.text === 'string' ? item.text : typeof item.content === 'string' ? item.content : typeof item.context === 'string' ? item.context : '';
-    const metadata = { ...(defaults.metadata || {}), ...(item.metadata || {}), ...(item.detail?.slot ? { slot: item.detail.slot } : {}) };
+    const metadata = {
+      ...(defaults.metadata || {}),
+      ...(item.metadata || {}),
+      ...(item.detail?.slot ? { slot: item.detail.slot } : {}),
+      ...(item.detail?.intercepted ? { intercepted: true, reply: item.detail.reply ?? null } : {}),
+    };
     if (!text.trim()) continue;
     const dedupeKey =
       item.dedupeKey ??

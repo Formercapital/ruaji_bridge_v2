@@ -8,18 +8,98 @@
  * 写入遵守存储层既有的影子约束：sideEffectsEnabled=false 时 persist() 只记录
  * 不落盘。面板会把这件事直接告诉用户（persisted: false），
  * 而不是让人以为改动生效了。
+ *
+ * Favour Ultra 接入后的口径（合同）：
+ *   - favourUltraEnabled 时，读接口改读统一宿主上的 Favour 权威数据
+ *     （同一份刻度/等级/关系/排他标记），不再展示旧 90 分制；
+ *   - 写接口（adjust / cold_violence）下线，Favour 原生页面是唯一写表面；
+ *   - 旧路径仅在未启用 Favour 时可用，作为回滚通道。
  */
 
 import { getRelationStage, formatBar, RELATION_STAGES } from '../../storage/affection-store.js';
+import { resolveFavourLevel } from '../../storage/favour-client.js';
+
+/** Favour Ultra 新刻度（与上游 favour_levels 对齐），供面板渲染等级带 */
+const FAVOUR_STAGES = [
+  [-200, -151, '极度厌恶', 'detest'],
+  [-150, -51, '厌恶', 'hostile'],
+  [-50, -1, '反感', 'averse'],
+  [0, 149, '普通', 'normal'],
+  [150, 299, '喜欢', 'liked'],
+  [300, 449, '亲密', 'intimate'],
+  [450, 1000, '挚爱', 'devoted'],
+];
 
 export function createAffectionApi(deps) {
-  const { affectionStore, config, logger } = deps;
+  const { affectionStore, favourClient, config, logger } = deps;
   const log = logger?.child({ component: 'web-affection' }) ?? console;
+  const favourMode = () => Boolean(config.favourUltraEnabled && favourClient?.enabled);
+
+  /** Favour 权威记录 → 面板行（新刻度） */
+  const favourRow = (record) => {
+    const uid = String(record.user_id);
+    const favour = Number(record.favour ?? 0);
+    const span = 1200; // -200..1000
+    const filled = Math.round(((favour + 200) / span) * 10);
+    return {
+      uid,
+      nickname: record.username || uid,
+      affection: favour,
+      bar: '█'.repeat(Math.max(0, Math.min(10, filled))),
+      level: resolveFavourLevel(favour),
+      levelKey: 'favour',
+      relationship: record.relationship && record.relationship !== '无' ? record.relationship : resolveFavourLevel(favour),
+      isUnique: Boolean(record.is_unique),
+      interactions: 0,
+      consecutiveDecreases: 0,
+      /** 冷暴力状态由插件管理；面板是只读的，不在这里再开一份状态副本 */
+      isColdViolent: false,
+      coldRemainingMinutes: 0,
+      coldViolenceUntil: null,
+      firstSeen: null,
+      lastSeen: record.last_interaction || null,
+      isOwner: uid === String(config.identity.ownerId),
+      lastChange: null,
+      recentDeltas: [],
+    };
+  };
+
+  const loadFavourRecords = async () => {
+    try {
+      return await favourClient.listRecords();
+    } catch {
+      return [];
+    }
+  };
 
   return {
     'GET /api/affection': async ({ url }) => {
       const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();
       const limit = clamp(Number(url.searchParams.get('limit') ?? 200), 1, 2000);
+
+      if (favourMode()) {
+        const records = await loadFavourRecords();
+        const rows = records.map(favourRow).filter((r) => {
+          if (!q) return true;
+          return (
+            r.uid.includes(q) ||
+            String(r.nickname).toLowerCase().includes(q) ||
+            String(r.relationship).toLowerCase().includes(q)
+          );
+        });
+        return {
+          body: {
+            source: 'favour-ultra',
+            favourUltra: true,
+            persistEnabled: config.reply.sideEffectsEnabled,
+            shadowMode: config.mode === 'shadow',
+            ownerId: config.identity.ownerId,
+            stages: FAVOUR_STAGES.map(([lo, hi, title, key]) => ({ lo, hi, title, key })),
+            total: rows.length,
+            items: rows.slice(0, limit),
+          },
+        };
+      }
 
       const rows = affectionStore
         .listUsers()
@@ -49,6 +129,12 @@ export function createAffectionApi(deps) {
 
     'GET /api/affection/*': async ({ pathname }) => {
       const uid = pathname.slice('/api/affection/'.length);
+      if (favourMode()) {
+        const records = await loadFavourRecords();
+        const record = records.find((r) => String(r.user_id) === uid);
+        if (!record) return { status: 404, body: { error: `没有 ${uid} 的好感度记录` } };
+        return { body: { item: favourRow(record), favourUltra: true } };
+      }
       const user = affectionStore.getUser(uid);
       if (!user) return { status: 404, body: { error: `没有 ${uid} 的好感度记录` } };
       return { body: { item: toRow(uid, user, affectionStore) } };
@@ -61,6 +147,15 @@ export function createAffectionApi(deps) {
     'POST /api/affection/cold_violence': async ({ body }) => {
       const uid = String(body?.uid ?? '').trim();
       if (!uid) return { status: 400, body: { error: '缺少 uid' } };
+      if (favourMode()) {
+        return {
+          status: 410,
+          body: {
+            error: '冷暴力写入口已下线',
+            hint: 'Favour Ultra 已启用：请使用聊天命令（施加冷暴力/取消冷暴力）或 Favour 管理页面',
+          },
+        };
+      }
       if (affectionStore.isOwner(uid)) {
         return { status: 409, body: { error: '主人不可被施加冷暴力' } };
       }
@@ -103,6 +198,15 @@ export function createAffectionApi(deps) {
     'POST /api/affection/adjust': async ({ body }) => {
       const uid = String(body?.uid ?? '').trim();
       if (!uid) return { status: 400, body: { error: '缺少 uid' } };
+      if (favourMode()) {
+        return {
+          status: 410,
+          body: {
+            error: '好感度手动调整写入口已下线',
+            hint: 'Favour Ultra 已启用：Favour 管理页面是唯一写表面',
+          },
+        };
+      }
       if (affectionStore.isOwner(uid)) {
         return {
           status: 409,

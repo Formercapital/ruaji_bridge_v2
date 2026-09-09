@@ -109,6 +109,12 @@ export function validateContextResponse(body) {
     if (body.context != null && typeof body.context !== 'string') {
       return fail(['context 必须是字符串']);
     }
+    if (body.intercepted != null && typeof body.intercepted !== 'boolean') {
+      return fail(['intercepted 必须是布尔值']);
+    }
+    if (body.reply != null && typeof body.reply !== 'string') {
+      return fail(['reply 必须是字符串']);
+    }
     return OK;
   }
   return fail([`上下文响应类型不支持: ${typeof body}`]);

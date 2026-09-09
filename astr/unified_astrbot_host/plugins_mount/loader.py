@@ -35,7 +35,7 @@ from astrbot.core.star.star import Star, StarMetadata, star_map, star_registry
 from astrbot.core.star.star_handler import star_handlers_registry
 
 #: 挂载顺序。改动前先读本模块顶部的说明。
-MOUNT_ORDER = ("living_memory", "group_chat_plus")
+MOUNT_ORDER = ("living_memory", "group_chat_plus", "favour_ultra")
 
 
 @dataclass

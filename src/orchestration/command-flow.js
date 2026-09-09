@@ -65,6 +65,7 @@ export class CommandFlow {
     this.sender = opts.sender;
     this.config = opts.config;
     this.log = opts.logger?.child({ component: 'command-flow' }) ?? console;
+    this.hostUrl = opts.config?.unifiedHost?.baseUrl || '';
   }
 
   /**
@@ -76,6 +77,10 @@ export class CommandFlow {
     if (!cmd.startsWith('/') && !cmd.startsWith('#')) return { handled: false, command: null };
 
     const isOwner = inbound.flags.isOwner;
+
+    if (this.config.favourUltraEnabled && (cmd === '/好感' || cmd.startsWith('/好感度') || cmd.startsWith('/affection') || cmd.startsWith('/冷暴力') || cmd.startsWith('/取消冷暴力'))) {
+      return this._relayFavourCommand(inbound, cmd);
+    }
 
     if (NEW_SESSION_ALIASES.has(cmd)) {
       if (!isOwner) return this._deny(inbound, '/new');
@@ -135,6 +140,24 @@ export class CommandFlow {
     }
 
     return { handled: false, command: null };
+  }
+
+  async _relayFavourCommand(inbound, command) {
+    if (!this.hostUrl) return { handled: true, command };
+    try {
+      const res = await fetch(`${this.hostUrl}/api/v1/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ event: 'message.received', ...inbound, text: command, content: command }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.reply) this._reply(inbound, data.reply, command);
+      return { handled: true, command };
+    } catch (err) {
+      this.log.warn('Favour Ultra 命令中继失败', { command, error: err.message });
+      return { handled: true, command };
+    }
   }
 
   async _resetSession(inbound) {

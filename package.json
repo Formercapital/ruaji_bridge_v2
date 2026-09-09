@@ -14,6 +14,7 @@
     "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
     "replay": "node scripts/replay.js",
     "migrate-config": "node scripts/migrate-config.js",
+    "migrate-favour-ultra": "python scripts/migrate-favour-ultra.py",
     "shadow-backfill": "node scripts/shadow-learn-backfill.js"
   },
   "dependencies": {

@@ -120,6 +120,21 @@ class GenericPluginAdapter(UnifiedPluginContract):
             ]
 
         elapsed_ms = (time.perf_counter() - started) * 1000
+        if event.is_stopped():
+            reply = "\n".join(
+                chain.get_plain_text().strip()
+                for chain in event.sent_chains
+                if chain.get_plain_text().strip()
+            )
+            return [
+                ContextBlock(
+                    source=self._key,
+                    kind="system_prompt",
+                    content=reply,
+                    elapsed_ms=elapsed_ms,
+                    detail={"intercepted": True, "reply": reply or None},
+                )
+            ]
         blocks = _diff(baseline, req, self._key, elapsed_ms)
         if not blocks:
             # 与 LivingMemoryAdapter 同款：报告"跑了但没贡献"，聚合层据此展示

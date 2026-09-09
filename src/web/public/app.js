@@ -1437,7 +1437,7 @@ async function renderPluginsPortal() {
     return;
   }
 
-  function resolvePortalUrl(p) {
+function resolvePortalUrl(p) {
     return p.url || (p.port ? `http://127.0.0.1:${p.port}/` : '');
   }
 

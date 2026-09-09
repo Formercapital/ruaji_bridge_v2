@@ -286,10 +286,16 @@ export class InboundFlow {
     });
 
     try {
-      const { blocks } = await this.contextFlow.collect(inbound, {
+      const { blocks, intercepted, reply } = await this.contextFlow.collect(inbound, {
         triggerType: decision.triggerType,
         signal: controller.signal,
       });
+
+      if (intercepted) {
+        if (reply) this.commandFlow._reply(inbound, reply, '/favour-intercept');
+        this.health?.increment('messages', 'ignored');
+        return;
+      }
 
       const result = await this.replyFlow.run({
         inbound,

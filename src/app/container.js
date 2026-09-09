@@ -28,6 +28,7 @@ import { ModelSessionStore } from '../storage/model-session-store.js';
 import { OpenAiCompatibleAdapter } from '../adapters/model/openai-compatible.js';
 
 import { AffectionStore } from '../storage/affection-store.js';
+import { FavourClient } from '../storage/favour-client.js';
 import { PortrayalStore } from '../storage/portrayal-store.js';
 import { MemeStore } from '../storage/meme-store.js';
 import { ShadowLearnStore } from '../storage/shadow-learn-store.js';
@@ -77,6 +78,17 @@ export function createContainer(config, overrides = {}) {
     robotId: config.identity.robotId,
     persistEnabled: config.reply.sideEffectsEnabled,
     logger,
+  });
+  /**
+   * Favour Ultra 权威好感数据（走宿主通用页面 API）。
+   * favourUltraEnabled=false 或未配置宿主地址时 enabled=false，
+   * 消费者自动回落旧存储，宿主挂掉也不影响回复。
+   */
+  const favourClient = new FavourClient({
+    baseUrl: config.favourUltraEnabled ? (config.unifiedHost?.baseUrl ?? '') : '',
+    timeoutMs: config.context?.collectTimeoutMs ?? 2500,
+    logger,
+    fetchImpl,
   });
   const portrayalStore = new PortrayalStore({
     file: config.paths.portrayalFile,
@@ -188,6 +200,7 @@ export function createContainer(config, overrides = {}) {
   const portrayalWorker = new PortrayalWorker({
     portrayalStore,
     affectionStore,
+    favourClient,
     modelRouter,
     config,
     rootDir: config.paths.rootDir,
@@ -240,6 +253,7 @@ export function createContainer(config, overrides = {}) {
     aggregator: contextAggregator,
     sessionStore,
     affectionStore,
+    favourClient,
     portrayalStore,
     portrayalWorker,
     shadowStore: shadowLearnStore,
@@ -332,6 +346,7 @@ export function createContainer(config, overrides = {}) {
     traceCollector,
     // storage
     affectionStore,
+    favourClient,
     portrayalStore,
     memeStore,
     shadowLearnStore,

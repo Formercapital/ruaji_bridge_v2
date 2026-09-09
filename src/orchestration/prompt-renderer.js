@@ -136,7 +136,11 @@ export function renderSystemText({ inbound, contextBlocks, triggerType, affectio
   }]`;
 
   let affLine = '';
-  if (affectionContext) {
+  if (affectionContext?.favourManagedByHost) {
+    // Favour Ultra 模式：评分规则与当前分数由插件在宿主侧注入，
+    // 桥接只补画像，避免出现两套刻度与两套评分指令。
+    affLine = affectionContext.portrayal ? `\n[${affectionContext.portrayal}]` : '';
+  } else if (affectionContext) {
     const relStr = affectionContext.relationship ? ` | 关系: ${affectionContext.relationship}${affectionContext.is_unique ? '★(独占)' : ''}` : '';
     const portrayalStr = affectionContext.portrayal ? `\n[${affectionContext.portrayal}]` : '';
 

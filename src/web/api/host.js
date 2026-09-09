@@ -3,7 +3,7 @@
  */
 
 export function createHostApi(deps) {
-  const hostUrl = deps.config?.unifiedHost?.url ?? 'http://127.0.0.1:8870';
+  const hostUrl = deps.config?.unifiedHost?.baseUrl ?? 'http://127.0.0.1:8870';
 
   async function forwardGet(path) {
     try {
@@ -36,6 +36,11 @@ export function createHostApi(deps) {
     }
   }
 
+  async function forwardFavour(endpoint, method, body) {
+    const suffix = `/plug/favour_ultra/api/${endpoint}`;
+    return method === 'GET' ? forwardGet(suffix) : forwardPost(suffix, body);
+  }
+
   return {
     'GET /api/host/overview': async () => forwardGet('/api/v1/overview'),
     'GET /api/host/providers': async () => forwardGet('/api/v1/providers'),
@@ -47,5 +52,15 @@ export function createHostApi(deps) {
     'POST /api/host/memes/delete': async ({ body }) => forwardPost('/api/v1/memes/delete', body),
     'GET /api/host/memes/settings': async () => forwardGet('/api/v1/memes/settings'),
     'POST /api/host/memes/settings': async ({ body }) => forwardPost('/api/v1/memes/settings', body),
+    'GET /api/host/favour/config': async () => forwardFavour('config', 'GET'),
+    'POST /api/host/favour/config': async ({ body }) => forwardFavour('config', 'POST', body),
+    'GET /api/host/favour/datarecords': async () => forwardFavour('datarecords', 'GET'),
+    'POST /api/host/favour/datarecords': async ({ body }) => forwardFavour('datarecords', 'POST', body),
+    'GET /api/host/favour/backups': async () => forwardFavour('backups', 'GET'),
+    'POST /api/host/favour/backups': async ({ body }) => forwardFavour('backups', 'POST', body),
+    'GET /api/host/favour/sessions': async () => forwardFavour('sessions', 'GET'),
+    'POST /api/host/favour/sessions': async ({ body }) => forwardFavour('sessions', 'POST', body),
+    'GET /api/host/favour/session_sync': async () => forwardFavour('session_sync', 'GET'),
+    'POST /api/host/favour/session_sync': async ({ body }) => forwardFavour('session_sync', 'POST', body),
   };
 }

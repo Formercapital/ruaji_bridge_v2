@@ -4,9 +4,9 @@
  * 链路：
  *   构建 ModelRequest → publish llm.request → 流式调用模型
  *     → 逐段切句 → Middleware Pipeline → 入发送队列
- *   → 收尾轮跑一次完整文本的 Middleware（好感度写入在这一轮）
- *   → 后置表情匹配（文本段全部入队后，独立小模型挑一张表情包跟进）
- *   → publish llm.response
+ *   → 等全部分段入队 → 后置表情匹配（独立小模型挑一张表情包跟进）
+ *   → publish llm.response（同步等待，收尾轮之前——Favour 暂存靠它）
+ *   → 收尾轮跑一次完整文本的 Middleware（插件在这一轮消费暂存写库）
  *
  * 与旧 Bridge 的关键差异：
  *   旧 performClawRequest 里，流式分段和"全量分句"两条路径同时存在，
@@ -162,13 +162,14 @@ export class ReplyFlow {
       }
     }
 
-    // 收尾轮：对完整原文跑一次管线，好感度写入只在这一轮发生
-    await this._finalPass({ inbound, response, triggerType, state, signal });
+    // 等所有分段处理完：文本段全部进入发送队列。这是表情包 FIFO 跟在
+    // 最后送达的前提，也保证结算事件里的 segments 计数是终值。
+    await state.chain;
 
-    // 后置表情匹配：放在 _finalPass 之后 = 所有文本段已入队，FIFO 保证表情包
-    // 最后送达；必须在 run() 返回前完成 enqueue，waitForDelivery 才能覆盖它。
-    // 直接 enqueue 只受 sender 基线节流（有意为之：贴纸紧跟文本是自然节奏，
-    // 不走 typing-delay）。任何异常都被 maybeAttach 内部吞掉，不影响文本。
+    // 后置表情匹配：所有文本段已入队；必须在 run() 返回前完成 enqueue，
+    // waitForDelivery 才能覆盖它。直接 enqueue 只受 sender 基线节流
+    // （有意为之：贴纸紧跟文本是自然节奏，不走 typing-delay）。
+    // 任何异常都被 maybeAttach 内部吞掉，不影响文本。
     const memeMatch = response.rawText.trim() && !signal?.aborted
       ? await this.memeMatcher?.maybeAttach({
           inbound,
@@ -179,43 +180,19 @@ export class ReplyFlow {
         })
       : null;
 
+    // 评分结算时序（Favour Ultra 合同）：模型完成事件（含完整原文）必须派发在
+    // 收尾轮之前并同步等待——上游数据流是「响应钩子解析暂存 → 文本修饰钩子
+    // 清洗写库」，发布晚了暂存永远无人消费，评分永远不落库。一次回复只派发
+    // 一次；有界超时，失败降级：跳过本轮结算并记录，不影响发送。
+    await this._settleResponse({ inbound, response, state, memeMatch, signal, startedAt });
+
+    // 收尾轮：对完整原文跑一次管线；result.decorate 让插件弹出暂存并写库
+    await this._finalPass({ inbound, response, triggerType, state, signal });
+
     this.health?.update('model', {
       lastSuccessAt: new Date().toISOString(),
       consecutiveFailures: 0,
     });
-
-    this.eventBus.publish(
-      // createEvent 只保留 correlationId / sessionId / payload / timestamp
-      // （contracts/events.js:52-61），别的顶层字段都会被静默丢掉。
-      // 订阅者要用的东西一律放进 payload。
-      createEvent(EVENTS.LLM_RESPONSE, {
-        correlationId: inbound.correlationId,
-        sessionId: inbound.sessionId,
-        payload: {
-          messageId: inbound.messageId,
-          groupId: inbound.groupId,
-          userId: inbound.userId,
-          userName: inbound.sender.displayName,
-          messageType: inbound.messageType,
-          isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
-          /** 用户这一轮说了什么。`text` 已经被占用为模型回复，别再复用它 */
-          userText: inbound.content,
-          responseId: response.responseId,
-          model: response.model,
-          completionText: response.rawText,
-          completion_text: response.rawText,
-          text: response.rawText,
-          textLength: response.rawText.length,
-          segments: state.segments,
-          usage: response.usage,
-          latencyMs: response.latencyMs,
-          totalMs: Date.now() - startedAt,
-          /** 后置表情匹配结果（面板 trace 可验证） */
-          memeAttached: Boolean(memeMatch?.attached),
-          memeId: memeMatch?.memeId ?? null,
-        },
-      }),
-    );
 
     this.log.info('回复生成完成', {
       correlationId: inbound.correlationId,
@@ -225,6 +202,76 @@ export class ReplyFlow {
     });
 
     return { status: 'ok', segments: state.segments, response, suppressed: state.suppressed };
+  }
+
+  /**
+   * 派发模型完成事件（llm.response）并同步等待订阅者（统一宿主 → Favour
+   * 的 OnLLMResponseEvent 暂存钩子）结束。必须在收尾轮之前完成，这样
+   * 收尾轮里的 result.decorate 才能消费到暂存并真正写库。
+   *
+   * 降级语义：超时或异常只跳过本轮结算并记录日志，绝不影响已经入队的
+   * 文本发送。publish 本身是 allSettled 的，不会 reject；这里再套一层
+   * 有界竞速，防止单个订阅者吊住整轮回复。
+   */
+  async _settleResponse({ inbound, response, state, memeMatch, signal, startedAt }) {
+    if (signal?.aborted) return;
+
+    // createEvent 只保留 correlationId / sessionId / payload / timestamp
+    // （contracts/events.js:52-61），别的顶层字段都会被静默丢掉。
+    // 订阅者要用的东西一律放进 payload。
+    const envelope = createEvent(EVENTS.LLM_RESPONSE, {
+      correlationId: inbound.correlationId,
+      sessionId: inbound.sessionId,
+      payload: {
+        messageId: inbound.messageId,
+        groupId: inbound.groupId,
+        userId: inbound.userId,
+        userName: inbound.sender.displayName,
+        messageType: inbound.messageType,
+        isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+        /** 用户这一轮说了什么。`text` 已经被占用为模型回复，别再复用它 */
+        userText: inbound.content,
+        responseId: response.responseId,
+        model: response.model,
+        completionText: response.rawText,
+        completion_text: response.rawText,
+        text: response.rawText,
+        textLength: response.rawText.length,
+        segments: state.segments,
+        usage: response.usage,
+        latencyMs: response.latencyMs,
+        totalMs: Date.now() - startedAt,
+        /** 后置表情匹配结果（面板 trace 可验证） */
+        memeAttached: Boolean(memeMatch?.attached),
+        memeId: memeMatch?.memeId ?? null,
+      },
+    });
+
+    const timeoutMs = this.config.reply?.settlementTimeoutMs ?? 8000;
+    let settled = false;
+    try {
+      await Promise.race([
+        Promise.resolve(this.eventBus.publish(envelope)).then(() => {
+          settled = true;
+        }),
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, timeoutMs);
+          if (typeof timer.unref === 'function') timer.unref();
+        }),
+      ]);
+    } catch (err) {
+      this.log.warn('模型完成事件派发异常，本轮评分结算跳过（不影响发送）', {
+        correlationId: inbound.correlationId,
+        error: err.message,
+      });
+      return;
+    }
+    if (!settled) {
+      this.log.warn('模型完成事件派发超时，本轮评分结算跳过（不影响发送）', {
+        correlationId: inbound.correlationId,
+        timeoutMs,
+      });
+    }
   }
 
   /**
