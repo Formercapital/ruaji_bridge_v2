@@ -1,0 +1,21 @@
+{
+  "name": "self-message",
+  "description": "机器人自己发的消息。必须在最前面被过滤掉，否则会自问自答死循环。旧 Bridge 的 bridge.js:1147 做这件事。",
+  "source": "conversation.jsonl（assistant 侧记录反推）",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 170512099,
+    "self_id": 398276230,
+    "user_id": 398276230,
+    "group_id": 707423412,
+    "time": 1787435248,
+    "raw_message": "OK",
+    "sender": { "user_id": 398276230, "nickname": "瑞姬", "card": "" }
+  },
+  "expect": {
+    "dropped": "self_message",
+    "message": null
+  }
+}

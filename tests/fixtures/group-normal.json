@@ -1,0 +1,34 @@
+{
+  "name": "group-normal",
+  "description": "普通群聊，既没 @ 也没点名，应当被忽略。文本取自 bridge.log 2026/8/4 03:41:22 的真实忽略样本。注意它里面**含有**「瑞姬」二字，但出现在「把瑞姬」之中，前一个字不是句读边界，所以名字呼唤判定为 false —— 这正是旧实现 msg.includes('瑞姬') 会误触发、而边界正则不会的那个用例。",
+  "source": "bridge.log",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 142330451,
+    "self_id": 398276230,
+    "user_id": 10000001,
+    "group_id": 793019665,
+    "time": 1785786082,
+    "raw_message": "我平常都把瑞姬那个号当神秘垃圾桶，要标记的东西都往那里扔",
+    "sender": {
+      "user_id": 10000001,
+      "nickname": "ruaji(阵亡)",
+      "card": "",
+      "role": "owner"
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "我平常都把瑞姬那个号当神秘垃圾桶，要标记的东西都往那里扔",
+    "flags": {
+      "isOwner": true,
+      "isAtBot": false,
+      "isNameCall": false
+    },
+    "isWake": false,
+    "route": "ignore",
+    "routeReason": "not_woken"
+  }
+}

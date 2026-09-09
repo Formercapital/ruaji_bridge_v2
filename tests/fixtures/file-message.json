@@ -1,0 +1,48 @@
+{
+  "name": "file-message",
+  "description": "群里发文件并 @ 机器人。文件类型是旧 Bridge 长期缺失的能力（对话记录里瑞姬自己承认过「bridge.js 压根都没写 file 类型的解析处理」）。v2 必须把文件下载到 received_files/ 并把**本地绝对路径**挂进 media 与 content（附录 2）。",
+  "source": "conversation.jsonl（瑞姬关于文件解析缺失的自述）+ OneBot 文件段结构",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 170430998,
+    "self_id": 398276230,
+    "user_id": 3209757816,
+    "group_id": 1076958977,
+    "time": 1787418600,
+    "raw_message": "[CQ:at,qq=398276230] 帮我看看这个报错[CQ:file,file=Player.log,file_id=/9d0f1b2c-0000-4000-8000-000000000001,file_size=20480,busid=102]",
+    "message": [
+      { "type": "at", "data": { "qq": "398276230" } },
+      { "type": "text", "data": { "text": " 帮我看看这个报错" } },
+      {
+        "type": "file",
+        "data": {
+          "file": "Player.log",
+          "name": "Player.log",
+          "file_id": "/9d0f1b2c-0000-4000-8000-000000000001",
+          "file_size": 20480,
+          "busid": 102
+        }
+      }
+    ],
+    "sender": {
+      "user_id": 3209757816,
+      "nickname": "Sandora Kervie Urasis",
+      "card": "",
+      "role": "member"
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "flags": {
+      "isAtBot": true,
+      "hasFile": true
+    },
+    "contentContains": ["本地绝对路径", "Player.log"],
+    "mediaKinds": ["file"],
+    "isWake": true,
+    "route": "direct",
+    "triggerType": "at"
+  }
+}

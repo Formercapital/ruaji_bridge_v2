@@ -1,0 +1,243 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { DecisionFlow, IGNORE_REASONS } from '../../src/orchestration/decision-flow.js';
+import { CapabilityBus } from '../../src/core/capability-bus.js';
+import { SessionStore } from '../../src/storage/session-store.js';
+import { InboundNormalizer } from '../../src/adapters/napcat/inbound-normalizer.js';
+import { ROUTES, TRIGGER_TYPES, CAPABILITIES, normalizeRoute } from '../../src/contracts/capabilities.js';
+import { createInboundMessage } from '../../src/contracts/messages.js';
+import { createTestLogger, loadFixture } from '../helpers.js';
+
+const CONFIG = {
+  identity: { ownerId: '10000001', robotId: '398276230', botName: '瑞姬', rateLimitUsers: ['10000002'] },
+  wake: { mode: 'both', namePattern: '(^|[\\s，,。.!！?？~、；;:：])瑞姬' },
+  decision: { rateLimit: { maxReplies: 5, windowMs: 300000 }, localWindowSize: 15, localWindowInject: 6 },
+};
+
+function makeFlow({ providerRoute, providerFails = false, sessionStore } = {}) {
+  const logger = createTestLogger();
+  const capabilityBus = new CapabilityBus({ logger });
+
+  if (providerRoute !== undefined || providerFails) {
+    capabilityBus.register({
+      id: 'test-decider',
+      capability: CAPABILITIES.DECISION_GROUP_REPLY,
+      priority: 100,
+      timeoutMs: 100,
+      invoke: async () => {
+        if (providerFails) throw new Error('provider down');
+        return { route: providerRoute, reason: 'test' };
+      },
+    });
+  }
+
+  const sessions = sessionStore ?? new SessionStore();
+  const normalizer = new InboundNormalizer({ identity: CONFIG.identity, wake: CONFIG.wake, logger });
+
+  return new DecisionFlow({ capabilityBus, sessionStore: sessions, normalizer, config: CONFIG, logger });
+}
+
+function makeInbound(overrides = {}) {
+  return createInboundMessage({
+    correlationId: 'c1',
+    messageId: 'm1',
+    userId: '2260757842',
+    groupId: '793019665',
+    messageType: 'group',
+    text: '随便说点什么',
+    content: '随便说点什么',
+    sender: { nickname: '御娘狼三千', card: '', displayName: '御娘狼三千' },
+    ...overrides,
+    flags: { isAtBot: false, isNameCall: false, isOwner: false, ...(overrides.flags ?? {}) },
+  });
+}
+
+test('normalizeRoute 把上游各种取值归一', () => {
+  assert.equal(normalizeRoute('direct'), ROUTES.DIRECT);
+  assert.equal(normalizeRoute('auto'), ROUTES.AUTO);
+  assert.equal(normalizeRoute('ignore'), ROUTES.IGNORE);
+  assert.equal(normalizeRoute('duplicate'), ROUTES.IGNORE, 'duplicate 映射到 ignore');
+  assert.equal(normalizeRoute('none'), ROUTES.IGNORE);
+  assert.equal(normalizeRoute(''), ROUTES.IGNORE);
+  assert.equal(normalizeRoute(undefined), ROUTES.IGNORE);
+  assert.equal(normalizeRoute('未知取值'), ROUTES.IGNORE);
+});
+
+test('私聊恒 direct，不问裁决 Provider', async () => {
+  const flow = makeFlow({ providerRoute: 'ignore' });
+  const decision = await flow.decide(
+    makeInbound({ messageType: 'private', groupId: null, userId: '10000001' }),
+  );
+  assert.equal(decision.route, ROUTES.DIRECT);
+  assert.equal(decision.reason, 'private_message');
+});
+
+test('Provider 返回 direct 且消息未 @ 时，v2 放行（修正旧 bridge.js:1239 的缺陷）', async () => {
+  const flow = makeFlow({ providerRoute: 'direct' });
+  const decision = await flow.decide(makeInbound());
+  assert.equal(decision.route, ROUTES.DIRECT, '这正是与旧 Bridge 的有意识差异');
+  assert.equal(decision.reason, 'provider_direct');
+});
+
+test('Provider 返回 auto 时走主动接话', async () => {
+  const flow = makeFlow({ providerRoute: 'auto' });
+  const decision = await flow.decide(makeInbound());
+  assert.equal(decision.route, ROUTES.AUTO);
+  assert.equal(decision.triggerType, TRIGGER_TYPES.AI_DECISION);
+});
+
+test('Provider 返回 ignore 且没被 @ 时忽略', async () => {
+  const flow = makeFlow({ providerRoute: 'ignore' });
+  const decision = await flow.decide(makeInbound());
+  assert.equal(decision.route, ROUTES.IGNORE);
+  assert.equal(decision.reason, IGNORE_REASONS.PROVIDER_IGNORE);
+});
+
+test('真 @ 优先于 Provider 的 ignore —— 被点名不能不理人', async () => {
+  const flow = makeFlow({ providerRoute: 'ignore' });
+  const decision = await flow.decide(makeInbound({ flags: { isAtBot: true } }));
+  assert.equal(decision.route, ROUTES.DIRECT);
+  assert.equal(decision.reason, 'at_overrides_provider_ignore');
+});
+
+test('Provider 不可用时降级为真 @ 兜底', async () => {
+  const atFlow = makeFlow({ providerFails: true });
+  const woken = await atFlow.decide(makeInbound({ flags: { isAtBot: true } }));
+  assert.equal(woken.route, ROUTES.DIRECT);
+  assert.equal(woken.reason, 'provider_unavailable_at_fallback');
+
+  const notWoken = await atFlow.decide(makeInbound());
+  assert.equal(notWoken.route, ROUTES.IGNORE);
+  assert.equal(notWoken.reason, IGNORE_REASONS.NOT_WOKEN);
+});
+
+test('完全没注册裁决 Provider 时同样走真 @ 兜底', async () => {
+  const flow = makeFlow();
+  const decision = await flow.decide(makeInbound({ flags: { isNameCall: true } }));
+  assert.equal(decision.route, ROUTES.DIRECT);
+  assert.equal(decision.triggerType, TRIGGER_TYPES.KEYWORD);
+});
+
+test('triggerType：真 @ → at，名字呼唤 → keyword', async () => {
+  const flow = makeFlow({ providerRoute: 'direct' });
+  assert.equal((await flow.decide(makeInbound({ flags: { isAtBot: true } }))).triggerType, TRIGGER_TYPES.AT);
+  assert.equal((await flow.decide(makeInbound({ flags: { isNameCall: true } }))).triggerType, TRIGGER_TYPES.KEYWORD);
+});
+
+test('限流：名单内用户超过 5 次 / 5 分钟后静默忽略', async () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ providerRoute: 'direct', sessionStore: sessions });
+  const bot = makeInbound({ userId: '10000002', flags: { isAtBot: true } });
+
+  for (let i = 0; i < 5; i++) {
+    const d = await flow.decide(bot);
+    assert.equal(d.route, ROUTES.DIRECT, `第 ${i + 1} 次应放行`);
+    sessions.recordReply('10000002');
+  }
+
+  const blocked = await flow.decide(bot);
+  assert.equal(blocked.route, ROUTES.IGNORE);
+  assert.equal(blocked.reason, IGNORE_REASONS.RATE_LIMITED);
+});
+
+test('限流不影响名单外用户', async () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ providerRoute: 'direct', sessionStore: sessions });
+  for (let i = 0; i < 20; i++) sessions.recordReply('2260757842');
+
+  const decision = await flow.decide(makeInbound({ flags: { isAtBot: true } }));
+  assert.equal(decision.route, ROUTES.DIRECT);
+});
+
+// ===== 并发仲裁与打断特权（附录 1）=====
+
+test('空闲时直接开始', () => {
+  const flow = makeFlow();
+  assert.deepEqual(flow.arbitrateConcurrency(makeInbound()), { action: 'start' });
+});
+
+test('在途生成时，普通群友只排队不打断', () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ sessionStore: sessions });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', { controller, source: 'direct' });
+
+  const result = flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }));
+  assert.equal(result.action, 'queue');
+  assert.equal(controller.signal.aborted, false, '普通群友不得打断在途生成');
+});
+
+test('ruaji 的消息拥有即时打断特权', () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ sessionStore: sessions });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', { controller, source: 'direct' });
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    flags: { isOwner: true, isAtBot: true },
+  });
+  const result = flow.arbitrateConcurrency(owner);
+
+  assert.equal(result.action, 'preempt');
+  assert.equal(controller.signal.aborted, true, '主人消息必须立即打断在途生成');
+  assert.ok(controller.signal.reason?.preempted);
+});
+
+test('在途生成时，无 @ 的 auto 插话直接丢弃而不是排队（P2）', () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ sessionStore: sessions });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', { controller, source: 'direct' });
+
+  const result = flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }), {
+    route: ROUTES.AUTO,
+  });
+
+  assert.equal(result.action, 'drop');
+  assert.equal(controller.signal.aborted, false, '丢弃不能打断在途生成');
+});
+
+test('在途生成时，被真 @ 的 auto 消息仍然排队（真 @ 优先于裁决者）', () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ sessionStore: sessions });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', { controller, source: 'direct' });
+
+  const atMe = makeInbound({ executionKey: 'group_793019665', flags: { isAtBot: true } });
+  assert.equal(flow.arbitrateConcurrency(atMe, { route: ROUTES.AUTO }).action, 'queue');
+
+  // 主人的 auto 消息照旧走打断特权，不被丢弃分支截走
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    flags: { isOwner: true },
+  });
+  assert.equal(flow.arbitrateConcurrency(owner, { route: ROUTES.AUTO }).action, 'preempt');
+});
+
+test('不传 decision 时仲裁行为与旧签名一致（永不 drop）', () => {
+  const sessions = new SessionStore();
+  const flow = makeFlow({ sessionStore: sessions });
+  sessions.beginExecution('group_793019665', { controller: new AbortController(), source: 'direct' });
+
+  assert.equal(flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' })).action, 'queue');
+});
+
+test('Golden fixture 的裁决结果符合预期', async () => {
+  const logger = createTestLogger();
+  const normalizer = new InboundNormalizer({ identity: CONFIG.identity, wake: CONFIG.wake, logger });
+
+  for (const name of ['group-at-bot', 'group-name-call', 'group-normal', 'private-message']) {
+    const fixture = loadFixture(name);
+    const { message } = await normalizer.normalize(fixture.event);
+    if (!message) continue;
+
+    // 裁决 Provider 不可用（现实中 GCP 可能没起），走兜底路径
+    const flow = makeFlow({ providerFails: true });
+    const decision = await flow.decide(message);
+    assert.equal(decision.route, fixture.expect.route, `${name} 的裁决应为 ${fixture.expect.route}`);
+  }
+});

@@ -1,0 +1,37 @@
+{
+  "name": "group-name-call",
+  "description": "群里点名呼唤但没有真 @。取自 conversation.jsonl 2026-08-05T03:32:43.052Z（linyuan / 1076958977）。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 148820117,
+    "self_id": 398276230,
+    "user_id": 1878809127,
+    "group_id": 1076958977,
+    "time": 1785900763,
+    "raw_message": "瑞姬今天怎么不冒泡",
+    "sender": {
+      "user_id": 1878809127,
+      "nickname": "linyuan",
+      "card": "",
+      "role": "member"
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "瑞姬今天怎么不冒泡",
+    "content": "瑞姬今天怎么不冒泡",
+    "sessionId": "qq:group:1076958977",
+    "flags": {
+      "isOwner": false,
+      "isAtBot": false,
+      "isNameCall": true,
+      "hasImage": false
+    },
+    "isWake": true,
+    "route": "direct",
+    "triggerType": "keyword"
+  }
+}

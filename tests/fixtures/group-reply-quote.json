@@ -1,0 +1,41 @@
+{
+  "name": "group-reply-quote",
+  "description": "引用他人消息 + @ 机器人。取自 conversation.jsonl 2026-08-22T16:33:09.038Z（御娘狼三千 / 793019665）。quotedMessage 是 get_msg 应当返回的原消息，供 mock NapCat API 使用。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 146162901,
+    "self_id": 398276230,
+    "user_id": 2260757842,
+    "group_id": 793019665,
+    "time": 1787416389,
+    "raw_message": "[CQ:reply,id=146162333][CQ:at,qq=398276230] 姐姐晚安我也睡了，偷偷亲姐姐一下",
+    "sender": {
+      "user_id": 2260757842,
+      "nickname": "御娘狼三千",
+      "card": "",
+      "role": "member"
+    }
+  },
+  "quotedMessage": {
+    "message_id": 146162333,
+    "sender": { "user_id": 398276230, "nickname": "瑞姬", "card": "" },
+    "message": [{ "type": "text", "data": { "text": "晚安。别熬了。" } }]
+  },
+  "expect": {
+    "dropped": null,
+    "text": "姐姐晚安我也睡了，偷偷亲姐姐一下",
+    "content": "[引用 瑞姬 的消息: 晚安。别熬了。] @瑞姬 姐姐晚安我也睡了，偷偷亲姐姐一下",
+    "flags": {
+      "isOwner": false,
+      "isAtBot": true,
+      "isNameCall": false,
+      "hasQuote": true
+    },
+    "isWake": true,
+    "route": "direct",
+    "triggerType": "at"
+  }
+}

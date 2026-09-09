@@ -1,0 +1,35 @@
+{
+  "name": "private-message",
+  "description": "主人私聊纯文本。取自 conversation.jsonl 2026-08-22T16:39:36.953Z。私聊恒 direct，不经裁决 Provider。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "private",
+    "sub_type": "friend",
+    "message_id": 869112044,
+    "self_id": 398276230,
+    "user_id": 10000001,
+    "time": 1787416776,
+    "raw_message": "蜂蜜1比40的配比会影响冷萃的效率吗？",
+    "sender": {
+      "user_id": 10000001,
+      "nickname": "ruaji(阵亡)",
+      "card": ""
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "蜂蜜1比40的配比会影响冷萃的效率吗？",
+    "content": "蜂蜜1比40的配比会影响冷萃的效率吗？",
+    "sessionId": "qq:private:10000001",
+    "executionKey": "private_10000001",
+    "flags": {
+      "isOwner": true,
+      "isAtBot": false,
+      "isNameCall": false
+    },
+    "route": "direct",
+    "routeReason": "private_message",
+    "triggerType": "at"
+  }
+}

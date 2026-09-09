@@ -1,0 +1,38 @@
+{
+  "name": "group-at-with-image",
+  "description": "群里发图并 @ 机器人（图片段在 @ 之前）。取自 conversation.jsonl 2026-08-22T17:00 前后，Sandora Kervie Urasis / 1076958977。url 中的 &amp; 是 NapCat 的 CQ 转义，解析时必须还原成 &。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 170420117,
+    "self_id": 398276230,
+    "user_id": 3209757816,
+    "group_id": 1076958977,
+    "time": 1787418000,
+    "raw_message": "[CQ:image,file=C5BB98658F937BE0A68D3C90182F842C.png,sub_type=0,url=https://multimedia.nt.qq.com.cn/download?appid=1407&amp;fileid=EhQOfg4IKsIWxr68iFQMRXupaRXCFxicyp8BIP8KKLjN3fratJYDMgRwcm9kUIC9owFaELzo8_yGlyAuckSstFsIutR6AsPUggECZ3o&amp;rkey=CAQSMKqBl9bB17pETgbmmrhGCq_lZ6a1mj4aZ35RSHUVVLpfEGA0VBWmR06_2KnV3BbX4g,file_size=2614556][CQ:at,qq=398276230]",
+    "sender": {
+      "user_id": 3209757816,
+      "nickname": "Sandora Kervie Urasis",
+      "card": "",
+      "role": "member"
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "",
+    "content": "@瑞姬",
+    "contentNote": "图片 CQ 码被剔除后只剩 @，转成文字后就是 '@瑞姬'。只有连 @ 都没有、正文彻底为空时才降级成 '[图片消息]' —— 与旧 bridge.js:1486 的 `if ((imgMatch || attachedFileSummary) && !clean)` 一致。",
+    "imageUrlUnescaped": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQOfg4IKsIWxr68iFQMRXupaRXCFxicyp8BIP8KKLjN3fratJYDMgRwcm9kUIC9owFaELzo8_yGlyAuckSstFsIutR6AsPUggECZ3o&rkey=CAQSMKqBl9bB17pETgbmmrhGCq_lZ6a1mj4aZ35RSHUVVLpfEGA0VBWmR06_2KnV3BbX4g",
+    "flags": {
+      "isOwner": false,
+      "isAtBot": true,
+      "isNameCall": false,
+      "hasImage": true
+    },
+    "isWake": true,
+    "route": "direct",
+    "triggerType": "at"
+  }
+}

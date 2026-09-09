@@ -1,0 +1,44 @@
+{
+  "name": "private-mface",
+  "description": "私聊商城表情（LLBOT mface 段）。取自 get_friend_msg_history 2026-09-01 23:41，摸头 raw300.gif。修复前 mface 段不进媒体管线，纯 mface 消息按 empty_content 静默丢弃，/收集表情 收到 0 张。",
+  "source": "llbot get_friend_msg_history",
+  "event": {
+    "post_type": "message",
+    "message_type": "private",
+    "sub_type": "friend",
+    "message_id": 142193224,
+    "message_seq": 8126,
+    "self_id": 398276230,
+    "user_id": 10000001,
+    "time": 1788277293,
+    "font": 14,
+    "raw_message": "[CQ:mface,summary=&#91;摸头&#93;,url=https://gxh.vip.qq.com/club/item/parcel/item/26/26f5b2f61b2c88c72d7c49cb76107c32/raw300.gif,emoji_id=26f5b2f61b2c88c72d7c49cb76107c32,emoji_package_id=244243,key=ededcf32dd0c4cf7]",
+    "message": [
+      {
+        "type": "mface",
+        "data": {
+          "summary": "[摸头]",
+          "url": "https://gxh.vip.qq.com/club/item/parcel/item/26/26f5b2f61b2c88c72d7c49cb76107c32/raw300.gif",
+          "emoji_id": "26f5b2f61b2c88c72d7c49cb76107c32",
+          "emoji_package_id": 244243,
+          "key": "ededcf32dd0c4cf7"
+        }
+      }
+    ],
+    "message_format": "array",
+    "sender": {
+      "user_id": 10000001,
+      "nickname": "ruaji(阵亡)",
+      "card": ""
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "content": "[图片消息]",
+    "mediaLabel": "摸头",
+    "flags": {
+      "isOwner": true,
+      "hasImage": true
+    }
+  }
+}

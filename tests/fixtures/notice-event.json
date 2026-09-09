@@ -1,0 +1,19 @@
+{
+  "name": "notice-event",
+  "description": "非 message 事件（群成员增加通知）。规范化必须直接丢弃，不进入任何后续链路。旧 Bridge 靠 bridge.js:1145 的 post_type 判断做这件事。",
+  "source": "OneBot notice 事件结构",
+  "event": {
+    "post_type": "notice",
+    "notice_type": "group_increase",
+    "sub_type": "approve",
+    "self_id": 398276230,
+    "user_id": 2260757842,
+    "group_id": 793019665,
+    "operator_id": 10000001,
+    "time": 1787418700
+  },
+  "expect": {
+    "dropped": "not_a_message_event",
+    "message": null
+  }
+}

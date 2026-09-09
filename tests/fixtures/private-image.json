@@ -1,0 +1,31 @@
+{
+  "name": "private-image",
+  "description": "私聊图文混排。取自 conversation.jsonl 2026-08-22T16:54:55.779Z。文字与图片同一条消息，content 里图片 CQ 码被剔除、文字保留。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "private",
+    "sub_type": "friend",
+    "message_id": 869112901,
+    "self_id": 398276230,
+    "user_id": 10000001,
+    "time": 1787417695,
+    "raw_message": "这样的勺子一勺约等于几g红茶[CQ:image,file=54E0B88AB0782BD8A1795BD3BFC270CE.jpg,sub_type=0,url=https://multimedia.nt.qq.com.cn/download?appid=1406&amp;fileid=EhR6qm5d6o9DeDmi1xMNURXrYJqzOhj46Qwg_goon46Q5tm0lgMyBHByb2RQgM6JHloQfdjd5bEKaoZ3UF3F9zPK7noCxMqCAQJneg&amp;rkey=CAQSMKqBl9bB17pETgbmmrhGCq_lZ6a1mj4aZ0Qyu1E4TGtcVlu38hSmUgZqq9K8WggoQQ,file_size=210168]",
+    "sender": {
+      "user_id": 10000001,
+      "nickname": "ruaji(阵亡)",
+      "card": ""
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "这样的勺子一勺约等于几g红茶",
+    "content": "这样的勺子一勺约等于几g红茶",
+    "flags": {
+      "isOwner": true,
+      "hasImage": true
+    },
+    "route": "direct",
+    "triggerType": "at"
+  }
+}

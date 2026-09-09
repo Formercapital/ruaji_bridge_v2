@@ -1,0 +1,41 @@
+{
+  "name": "group-at-bot",
+  "description": "群里真 @ 机器人。取自 conversation.jsonl 2026-08-22T21:45:01.741Z 的真实记录。",
+  "source": "conversation.jsonl",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 170512001,
+    "message_seq": 170512001,
+    "self_id": 398276230,
+    "user_id": 10000001,
+    "group_id": 707423412,
+    "time": 1787435101,
+    "raw_message": "[CQ:at,qq=398276230] 我要和你对话十次，你回个OK即可",
+    "sender": {
+      "user_id": 10000001,
+      "nickname": "ruaji(阵亡)",
+      "card": "",
+      "role": "owner"
+    }
+  },
+  "expect": {
+    "dropped": null,
+    "text": "我要和你对话十次，你回个OK即可",
+    "content": "@瑞姬 我要和你对话十次，你回个OK即可",
+    "sessionId": "qq:group:707423412",
+    "executionKey": "group_707423412",
+    "flags": {
+      "isOwner": true,
+      "isAtBot": true,
+      "isNameCall": false,
+      "hasImage": false,
+      "hasFile": false,
+      "hasQuote": false
+    },
+    "isWake": true,
+    "route": "direct",
+    "triggerType": "at"
+  }
+}
