@@ -121,8 +121,11 @@ export class InboundFlow {
     // 广播：与是否回复无关
     this._publishReceived(inbound);
 
-    // 好感度的"见过这个人"记录。主人恒 100，这里也会把他刷回 100。
-    if (this.config.reply.sideEffectsEnabled) {
+    // 好感度的"见过这个人"记录（仅旧体系）。Favour 模式下旧存储全面停写——
+    // 互动时间由插件结算路径自己维护（合同第 7 条）。
+    const legacyAffectionActive =
+      !this.config.favourUltraEnabled || this.config.legacyAffectionEnabled === true;
+    if (this.config.reply.sideEffectsEnabled && legacyAffectionActive) {
       try {
         this.affection.onUserMessage({ uid: inbound.userId, nickname: inbound.sender.displayName });
       } catch (err) {
