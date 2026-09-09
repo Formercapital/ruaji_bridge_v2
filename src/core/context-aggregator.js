@@ -8,7 +8,7 @@
  * 谁先谁后、总长多少、超了截谁，全靠拼接顺序隐式决定。
  *
  * v2 把它们统一成 ContextBlock，按固定 8 步聚合：
- *   丢弃失败/空 → 作用域过滤 → 按来源去重 → priority 排序
+ *   丢弃失败/空 → 作用域过滤 → 按 dedupeKey 去重 → priority 排序
  *   → 每来源预算 → 全局预算 → 保留截断原因 → 渲染
  */
 
@@ -172,19 +172,34 @@ export class ContextAggregator {
       return ok;
     });
 
-    // 3. 按来源去重：同 dedupeKey（缺省用 source）只保留优先级最高的一个
-    const seen = new Map();
+    // 3. 显式 dedupeKey 去重：同 key 只保留优先级最高的一个。
+    //    没带 dedupeKey 的块一律不去重——统一宿主的一个插件会产出多个
+    //    不同槽位的块（Favour Ultra：规则块 + 动态数据块），按 source
+    //    兜底去重会吞掉第二块，注入只剩一半。跨提供者互斥（GCP 上下文
+    //    vs 本地滑窗）由双方显式声明同一个 dedupeKey 达成。
+    const byKey = new Map();
+    const keptInOrder = [];
     for (const b of blocks) {
-      const key = b.dedupeKey ?? b.source;
-      const prev = seen.get(key);
-      if (!prev || b.priority > prev.priority) {
-        if (prev) dropped.push({ source: prev.source, reason: 'deduped' });
-        seen.set(key, b);
+      const key = b.dedupeKey;
+      if (!key) {
+        keptInOrder.push(b);
+        continue;
+      }
+      const prevIndex = byKey.get(key);
+      if (prevIndex === undefined) {
+        byKey.set(key, keptInOrder.length);
+        keptInOrder.push(b);
+        continue;
+      }
+      const prev = keptInOrder[prevIndex];
+      if (b.priority > prev.priority) {
+        keptInOrder[prevIndex] = b;
+        dropped.push({ source: prev.source, reason: 'deduped' });
       } else {
         dropped.push({ source: b.source, reason: 'deduped' });
       }
     }
-    blocks = [...seen.values()];
+    blocks = keptInOrder;
 
     // 4. 按 priority 降序；同优先级按 source 稳定排序
     blocks.sort((a, b) => b.priority - a.priority || a.source.localeCompare(b.source));
