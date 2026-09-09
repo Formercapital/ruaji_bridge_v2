@@ -1,6 +1,9 @@
 {
   "mode": "live",
 
+  "favourUltraEnabled": false,
+  "legacyAffectionEnabled": true,
+
   "identity": {
     "ownerId": "10000001",
     "robotId": "11111111",

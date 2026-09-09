@@ -142,9 +142,9 @@ class FavourManagerTool(Star):
             level_threshold=self.perm_level_threshold
         )
 
-        # 数据库初始化
+        # 数据库初始化（主人记录守卫下沉到 DB 写入口：评分/全局修改/面板编辑/清空/删除/衰减全走这里）
         self.data_dir = Path(context.get_config().get("plugin.data_dir", "./data")) / "plugin_data" / "astrbot_plugin_favour_ultra"
-        self.db_manager = FavourDBManager(self.data_dir, self.min_favour_value, self.max_favour_value)
+        self.db_manager = FavourDBManager(self.data_dir, self.min_favour_value, self.max_favour_value, owner_ids=self.admins_id)
         
         # 异步初始化数据库和迁移数据
         asyncio.create_task(self._init_storage())
@@ -255,7 +255,10 @@ class FavourManagerTool(Star):
         """初始化存储并迁移数据"""
         try:
             await self.db_manager.init_db()
-            
+
+            # 初始化后的主人记录重建（合同主人守卫 (b)：满分+默认亲密排他绑定+固定称谓）
+            await self.db_manager.ensure_owner_records()
+
             # 检查旧文件并迁移
             old_global = self.data_dir / "global_favour.json"
             old_local = self.data_dir / "haogan.json"
@@ -273,8 +276,10 @@ class FavourManagerTool(Star):
 
     def _migrate_framework_config(self, framework_config: dict) -> None:
         """将框架传入的配置迁移到 PluginConfigManager，仅首次安装时执行。"""
-        # 检查是否已经迁移过
-        if self.config_mgr.config_path.exists():
+        # 检查是否已经迁移过。上游判据是 config_path 是否存在，但首装时
+        # load_or_create 已经把默认配置落盘（见 config_manager._fresh_install
+        # 补丁说明）——刚生成的默认配置不算“已迁移”，仍需合并框架配置。
+        if self.config_mgr.config_path.exists() and not getattr(self.config_mgr, "_fresh_install", False):
             return
         try:
             # 基础字段

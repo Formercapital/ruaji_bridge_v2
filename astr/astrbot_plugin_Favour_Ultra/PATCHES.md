@@ -42,9 +42,26 @@ is minimal, additive, and replayable against a future upstream release.
    can see existing exclusive bindings, giving the model one consistent source
    of truth for exclusivity semantics. Snapshot failure degrades silently.
 
+8. **Data directory derivation** (`config_manager.py`, `__init__`):
+   upstream derives `plugin_data` from the plugin directory's
+   parent-of-parent, assuming an AstrBot `data/plugins/` install. The vendored
+   layout would put the config in the repo root. The patch prefers the
+   framework-provided data directory (constructor argument, set by the host's
+   `data` compat key) and keeps upstream behavior when absent.
+
+9. **Owner guard — database write layer** (`storage.py`):
+   the write chokepoint for every mutable path (scoring, global modify,
+   panel single-record edit/delete, session/global clear, decay). Owner
+   records accept only canonical writes (favour=max, relationship=亲密,
+   is_unique=true); deletes are refused and logged; decay never selects the
+   owner; clears preserve the owner rows.
+
+10. **Owner record rebuild** (`storage.py` `ensure_owner_records`, called from
+    `main.py` `_init_storage` and after clears): (re)creates the owner row at
+    max favour with the default exclusive intimate relation and fixed title,
+    repairing external corruption and post-clear state.
+
 ## Not needed (verified against the unified host)
 
-- **Data directory derivation**: the host sets the AstrBot compat key
-  `plugin.data_dir`, which the plugin already reads; no patch required.
 - **T2I rendering degradation**: not triggered in the host integration path;
   revisit only if table rendering fails in practice.

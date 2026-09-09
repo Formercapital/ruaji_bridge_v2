@@ -58,13 +58,17 @@ class FavourRecord(SQLModel, table=True):
 
 class FavourDBManager:
     """基于SQLite的好感度数据库管理器"""
-    def __init__(self, data_dir: Path, min_val: int = -100, max_val: int = 100):
+    def __init__(self, data_dir: Path, min_val: int = -100, max_val: int = 100, owner_ids=None):
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "favour.db"
         self.db_url = f"sqlite+aiosqlite:///{self.db_path}"
         self.min_val = min_val
         self.max_val = max_val
+        # 桥接补丁（合同：主人守卫-数据库写入口）。主人记录在所有写路径上
+        # 恒为 满分 + 亲密 + 排他；删除与衰减一律拒绝。评分/全局修改/面板
+        # 单条编辑/清空/删除全部经过这里，是真正的 chokepoint。
+        self.owner_ids = {str(x) for x in owner_ids} if owner_ids else set()
         
         # 创建异步引擎（优化 SQLite 并发：限制连接池 + busy timeout）
         self.engine = create_async_engine(
@@ -236,6 +240,69 @@ class FavourDBManager:
             return result.scalars().first()
 
     @_retry_on_locked()
+    async def ensure_owner_records(self) -> int:
+        """重建/修复主人记录（满分 + 默认亲密排他绑定 + 固定称谓）。
+
+        初始化与清空后调用。已存在的规范记录不动；缺失或被外部工具改动的
+        记录恢复为规范形态。
+        """
+        if not self.owner_ids:
+            return 0
+        await self.init_db()
+        count = 0
+        now = datetime.now()
+        try:
+            async with self.async_session() as session:
+                for uid in self.owner_ids:
+                    stmt = select(FavourRecord).where(
+                        FavourRecord.user_id == uid,
+                        FavourRecord.session_id == "global"
+                    )
+                    record = (await session.execute(stmt)).scalars().first()
+                    if not record:
+                        session.add(FavourRecord(
+                            user_id=uid,
+                            session_id="global",
+                            favour=self.max_val,
+                            relationship="亲密",
+                            is_unique=True,
+                            username="主人",
+                            last_interaction=now,
+                        ))
+                        count += 1
+                    elif (record.favour != self.max_val
+                          or record.relationship != "亲密"
+                          or not record.is_unique):
+                        record.favour = self.max_val
+                        record.relationship = "亲密"
+                        record.is_unique = True
+                        record.updated_at = now
+                        count += 1
+                await session.commit()
+            if count:
+                logger.info(f"[主人守卫] 已重建/修复 {count} 条主人记录（满分+亲密+排他）")
+            return count
+        except Exception as e:
+            logger.error(f"重建主人记录失败: {e}")
+            return 0
+
+    def _owner_write_is_canonical(self, favour, relationship, is_unique) -> bool:
+        """主人记录只接受规范值：满分、亲密（或留空）、排他。"""
+        if favour is not None and favour != self.max_val:
+            return False
+        if relationship is not None and relationship not in ("", "亲密"):
+            return False
+        if is_unique is not None and is_unique is not True:
+            return False
+        return True
+
+    def _canonicalize_owner(self, favour, relationship, is_unique):
+        return (
+            self.max_val if favour is not None else None,
+            ("亲密" if not relationship else relationship) if relationship is not None else None,
+            True if is_unique is not None else None,
+        )
+
     async def update_favour(
         self, 
         user_id: str, 
@@ -249,7 +316,16 @@ class FavourDBManager:
         await self.init_db()
         if not is_valid_userid(user_id):
             return False
-            
+
+        if user_id in self.owner_ids:
+            if not self._owner_write_is_canonical(favour, relationship, is_unique):
+                logger.warning(
+                    f"[主人守卫] 拒绝对主人 {user_id} 的非规范写入: "
+                    f"favour={favour}, relationship={relationship}, is_unique={is_unique}"
+                )
+                return False
+            favour, relationship, is_unique = self._canonicalize_owner(favour, relationship, is_unique)
+
         sid = session_id if session_id else "global"
         
         try:
@@ -303,7 +379,16 @@ class FavourDBManager:
         await self.init_db()
         if not is_valid_userid(user_id):
             return 0
-            
+
+        if user_id in self.owner_ids:
+            if not self._owner_write_is_canonical(favour, relationship, is_unique):
+                logger.warning(
+                    f"[主人守卫] 拒绝对主人 {user_id} 的全局非规范写入: "
+                    f"favour={favour}, relationship={relationship}, is_unique={is_unique}"
+                )
+                return 0
+            favour, relationship, is_unique = self._canonicalize_owner(favour, relationship, is_unique)
+
         try:
             async with self.async_session() as session:
                 values = {"updated_at": datetime.now()}
@@ -326,6 +411,9 @@ class FavourDBManager:
     async def delete_favour(self, user_id: str, session_id: Optional[str] = None) -> Tuple[bool, str]:
         """删除单条记录"""
         await self.init_db()
+        if user_id in self.owner_ids:
+            logger.warning(f"[主人守卫] 拒绝删除主人 {user_id} 的记录")
+            return False, "主人记录不可删除"
         sid = session_id if session_id else "global"
         try:
             async with self.async_session() as session:
@@ -390,6 +478,31 @@ class FavourDBManager:
         """更新指定记录的字段（favour, relationship, username 等）"""
         #################
         await self.init_db()
+        if self.owner_ids:
+            try:
+                async with self.async_session() as session:
+                    uid = (await session.execute(
+                        select(FavourRecord.user_id).where(FavourRecord.id == record_id)
+                    )).scalar()
+                if uid and str(uid) in self.owner_ids:
+                    if not self._owner_write_is_canonical(
+                        kwargs.get("favour"), kwargs.get("relationship"), kwargs.get("is_unique")
+                    ):
+                        logger.warning(f"[主人守卫] 拒绝对主人记录 #{record_id} 的非规范编辑: {kwargs}")
+                        return False
+                    for key in ("favour", "relationship", "is_unique"):
+                        kwargs.pop(key, None)
+                    async with self.async_session() as session:
+                        stmt = update(FavourRecord).where(FavourRecord.id == record_id).values(
+                            favour=self.max_val, relationship="亲密", is_unique=True, **kwargs
+                        )
+                        await session.execute(stmt)
+                        await session.commit()
+                    logger.info(f"[主人守卫] 主人记录 #{record_id} 仅接受规范字段（恒满+亲密+排他）")
+                    return True
+            except Exception as e:
+                logger.error(f"主人记录守卫检查失败 #{record_id}: {e}")
+                return False
         try:
             async with self.async_session() as session:
                 stmt = update(FavourRecord).where(FavourRecord.id == record_id).values(**kwargs)
@@ -405,6 +518,18 @@ class FavourDBManager:
         """删除指定记录"""
         #################
         await self.init_db()
+        if self.owner_ids:
+            try:
+                async with self.async_session() as session:
+                    uid = (await session.execute(
+                        select(FavourRecord.user_id).where(FavourRecord.id == record_id)
+                    )).scalar()
+                if uid and str(uid) in self.owner_ids:
+                    logger.warning(f"[主人守卫] 拒绝删除主人记录 #{record_id}（用户 {uid}）")
+                    return False
+            except Exception as e:
+                logger.error(f"主人记录守卫检查失败 #{record_id}: {e}")
+                return False
         try:
             async with self.async_session() as session:
                 stmt = delete(FavourRecord).where(FavourRecord.id == record_id)
@@ -423,9 +548,13 @@ class FavourDBManager:
         try:
             async with self.async_session() as session:
                 stmt = delete(FavourRecord).where(FavourRecord.session_id == sid)
+                if self.owner_ids:
+                    stmt = stmt.where(FavourRecord.user_id.notin_(list(self.owner_ids)))
                 await session.execute(stmt)
                 await session.commit()
-                return True
+            # 清空后的主人记录重建（合同主人守卫 (b)）
+            await self.ensure_owner_records()
+            return True
         except Exception as e:
             logger.error(f"清空会话记录失败: {str(e)}")
             return False
@@ -437,9 +566,13 @@ class FavourDBManager:
         try:
             async with self.async_session() as session:
                 stmt = delete(FavourRecord)
+                if self.owner_ids:
+                    stmt = stmt.where(FavourRecord.user_id.notin_(list(self.owner_ids)))
                 await session.execute(stmt)
                 await session.commit()
-                return True
+            # 清空后的主人记录重建（合同主人守卫 (b)）
+            await self.ensure_owner_records()
+            return True
         except Exception as e:
             logger.error(f"清空所有记录失败: {str(e)}")
             return False
@@ -465,8 +598,10 @@ class FavourDBManager:
         
         try:
             async with self.async_session() as session:
-                # 获取所有好感度高于 min_val 的记录
+                # 获取所有好感度高于 min_val 的记录（主人记录永不衰减）
                 stmt = select(FavourRecord).where(FavourRecord.favour > self.min_val)
+                if self.owner_ids:
+                    stmt = stmt.where(FavourRecord.user_id.notin_(list(self.owner_ids)))
                 result = await session.execute(stmt)
                 all_records = list(result.scalars().all())
             

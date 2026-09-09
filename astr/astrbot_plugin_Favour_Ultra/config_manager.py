@@ -141,8 +141,14 @@ class PluginConfigManager:
             context_data_dir: AstrBot 框架的 data 目录（用于检测旧配置）
         """
         self.plugin_dir = Path(plugin_dir)
-        # 配置文件保存在插件目录的上上级的 plugin_data 中
-        self.plugin_data_dir = self.plugin_dir.parent.parent / "plugin_data" / PLUGIN_NAME_FOR_CONFIG
+        # 桥接补丁（合同：数据目录推导）：上游假设插件装在 AstrBot
+        # data/plugins/ 下、靠父目录反推 plugin_data。宿主把插件 vendor 在
+        # 仓库的 astr/ 目录，反推会落到仓库根而不是宿主 data 目录。
+        # 优先使用框架传入的 data 目录；缺席时保持上游原行为。
+        if context_data_dir:
+            self.plugin_data_dir = Path(context_data_dir) / "plugin_data" / PLUGIN_NAME_FOR_CONFIG
+        else:
+            self.plugin_data_dir = self.plugin_dir.parent.parent / "plugin_data" / PLUGIN_NAME_FOR_CONFIG
         self.config_path = self.plugin_data_dir / CONFIG_FILENAME
 
         # 框架旧配置路径（用于迁移）
@@ -165,6 +171,7 @@ class PluginConfigManager:
 
         self._config: Dict[str, Any] = {}
         self._migrated = False
+        self._fresh_install = False
 
     def _deep_merge(self, base: Dict, override: Dict) -> Dict:
         """深度合并两个字典，override 覆盖 base。"""
@@ -269,6 +276,11 @@ class PluginConfigManager:
         logger.info("未检测到旧配置，按默认配置生成新配置文件。")
         self._config = copy.deepcopy(DEFAULT_CONFIG)
         self._save()
+        # 桥接补丁：标记首装。上游 main._migrate_framework_config 以
+        # “config_path 已存在”为“已迁移”判据，但本分支刚把默认配置落盘，
+        # 该判据永远为真 → 框架配置（宿主 config.yaml 的 overrides）永远
+        # 进不来。首装标记让迁移在“刚生成默认配置”这一种存在形态下仍执行。
+        self._fresh_install = True
         return self._config
 
     def _normalize_json_field(self, value: Any, default: Any) -> Any:
