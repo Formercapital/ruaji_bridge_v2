@@ -78,3 +78,4 @@ astr/unified_astrbot_host/tests/
 # 7.杂项
 # ==========================================
 start_mem0.*
+__pycache__/
