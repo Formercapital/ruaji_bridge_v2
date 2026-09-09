@@ -2018,11 +2018,6 @@ class FavourManagerTool(Star):
             session_id = self._get_session_id(event)
             user_id = str(event.get_sender_id())
 
-            # Bridge owner is a hard identity exception: the owner receives no
-            # favour instructions or model-generated favour markers.
-            if user_id in {str(item) for item in self.admins_id}:
-                return
-
             # 兜底：若 event_message_type 钩子未缓存（如早期版本启动顺序问题），这里再补一次
             if session_id and not self._is_shared_session(session_id) and session_id not in self._last_events:
                 self._last_events[session_id] = event
@@ -2255,9 +2250,6 @@ class FavourManagerTool(Star):
         """优先读取好感度标签（priority=10 确保在其他钩子之前执行）。"""
         if not hasattr(event, 'message_obj'): return
 
-        if str(event.get_sender_id()) in {str(item) for item in self.admins_id}:
-            return
-        
         # 搭话合成事件：不记录好感度变更（搭话不应影响好感度）
         if event.get_extra("_is_active_chat_synthetic"):
             logger.debug("[搭话管线] 搭话合成事件，跳过好感度标签解析。")
@@ -2362,9 +2354,6 @@ class FavourManagerTool(Star):
     async def update_data(self, event: AstrMessageEvent):
         if not hasattr(event, 'message_obj'): return
 
-        if str(event.get_sender_id()) in {str(item) for item in self.admins_id}:
-            return
-        
         # 搭话合成事件：不更新好感度数据
         if event.get_extra("_is_active_chat_synthetic"):
             logger.debug("[搭话管线] 搭话合成事件，跳过好感度数据更新。")

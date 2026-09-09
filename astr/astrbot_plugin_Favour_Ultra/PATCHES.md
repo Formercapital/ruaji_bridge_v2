@@ -9,16 +9,22 @@ is minimal, additive, and replayable against a future upstream release.
 
 ## Applied patches
 
-1. **Owner guard — prompt injection** (`main.py`, `inject_favour_prompt`):
-   the bridge owner (mapped to AstrBot `admins_id` by the unified host) gets no
-   favour instructions and the model produces no favour markers for the owner.
+1. **REMOVED 2026-09-09 — Owner guard, prompt injection** (`main.py`,
+   `inject_favour_prompt`): the owner previously got no favour instructions.
+   Removed at owner's request (owner is bound 亲密): the owner now receives the
+   full `<FavorabilityPlugin>` rules and `<FavourContext>` (level description,
+   score, relationship, exclusivity snapshot) like any other user.
 
-2. **Owner guard — response parsing** (`main.py`, `handle_llm_response`):
-   tags in a reply to the owner are never stashed for settlement.
+2. **REMOVED 2026-09-09 — Owner guard, response parsing** (`main.py`,
+   `handle_llm_response`): tags in replies to the owner are now stashed for
+   settlement like everyone else's.
 
-3. **Owner guard — settlement write** (`main.py`, `update_data`):
-   settlement for owner-originated replies returns early; the owner record is
-   never rewritten by ordinary scoring.
+3. **REMOVED 2026-09-09 — Owner guard, settlement write** (`main.py`,
+   `update_data`): settlement for owner-originated replies now runs. The owner
+   record is still pinned by the storage-layer guards (patches 4/9/10): any
+   scoring write is rejected or canonicalized back to
+   `favour=max (1000), relationship=亲密, is_unique=true`, so the pinned
+   intimate binding cannot drift.
 
 4. **Owner record immutability** (`main.py`, `_write_favour`):
    any plugin write path touching the owner record is forced to
