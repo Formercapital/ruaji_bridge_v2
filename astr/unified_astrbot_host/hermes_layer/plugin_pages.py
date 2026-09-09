@@ -190,23 +190,36 @@ window.AstrBotPluginPage = {{
     # 页面 API 桥（Quart handler → aiohttp）
     # ------------------------------------------------------------------
 
-    def _find_registered_api(self, key: str, endpoint: str) -> dict[str, Any] | None:
-        """在 registered_web_apis 里按插件包名前缀 + 端点名匹配。"""
-        table = getattr(self.unified.context, "registered_web_apis", None) or {}
-        if not table:
-            return None
+    def _find_api_specs(self, key: str, endpoint: str) -> list[tuple[str, Any, list[str]]]:
+        """在 registered_web_apis 里按插件包名前缀 + 端点名收集**全部** spec。
+
+        表是上游语义的 (route, handler, methods, desc) 列表：同路由不同方法
+        的注册共存（Favour Ultra 的 /config 是 GET/POST 两个 handler 双注册），
+        必须整体返回，由调用方按请求方法挑，不能像单值表那样取一条就算。
+
+        兼容旧 dict 形状的表项（防外部代码直接塞 dict 进来）。
+        """
+        table = getattr(self.unified.context, "registered_web_apis", None) or []
+        specs: list[tuple[str, Any, list[str]]] = []
+        for api in table:
+            if isinstance(api, dict):
+                route = str(api.get("route", ""))
+                handler = api.get("handler")
+                methods = [str(m).upper() for m in (api.get("methods") or ["GET"])]
+            else:
+                route = str(api[0])
+                handler = api[1]
+                methods = [str(m).upper() for m in (api[2] or ["GET"])]
+            specs.append((route, handler, methods))
+
         package = self._package_name(key)
-        normalized = f"{package}/{endpoint}".strip("/")
-        for route, spec in table.items():
-            r = str(route).strip("/")
-            if r.lower() == normalized.lower():
-                return spec if isinstance(spec, dict) else {"handler": spec, "methods": ["GET"]}
+        normalized = f"{package}/{endpoint}".strip("/").lower()
+        exact = [s for s in specs if s[0].strip("/").lower() == normalized]
+        if exact:
+            return exact
         # 兜底：尾缀匹配（不同上游对前导斜杠/大小写写法不一）
-        for route, spec in table.items():
-            r = str(route).strip("/")
-            if r.lower().endswith("/" + endpoint.lower()):
-                return spec if isinstance(spec, dict) else {"handler": spec, "methods": ["GET"]}
-        return None
+        suffix = "/" + endpoint.strip("/").lower()
+        return [s for s in specs if s[0].strip("/").lower().endswith(suffix)]
 
     async def handle_page_api(self, request: web.Request) -> web.Response:
         key = request.match_info["key"]
@@ -215,13 +228,21 @@ window.AstrBotPluginPage = {{
         if self._mount(key) is None:
             return _json({"ok": False, "error": f"plugin_not_mounted: {key}"}, status=404)
 
-        registered = self._find_registered_api(key, endpoint)
-        if not registered:
+        specs = self._find_api_specs(key, endpoint)
+        if not specs:
             return _json({"ok": False, "error": f"unknown page route: {key}/{endpoint}"}, status=404)
 
-        methods = [str(m).upper() for m in (registered.get("methods") or ["GET"])]
-        if request.method not in methods:
-            return _json({"ok": False, "error": "method_not_allowed"}, status=405)
+        handler = None
+        for _route, candidate, methods in specs:
+            if request.method in methods:
+                handler = candidate
+                break
+        if handler is None:
+            allowed = sorted({m for _r, _h, ms in specs for m in ms})
+            return _json(
+                {"ok": False, "error": "method_not_allowed", "allowed": allowed},
+                status=405,
+            )
 
         if self._quart is None:
             from quart import Quart
@@ -243,7 +264,7 @@ window.AstrBotPluginPage = {{
                 query_string=query_params,
                 json=body,
             ):
-                result = await registered["handler"]()
+                result = await handler()
         except Exception as exc:  # noqa: BLE001
             logger.exception("插件页面 API %s/%s 执行失败", key, endpoint)
             return _json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=500)

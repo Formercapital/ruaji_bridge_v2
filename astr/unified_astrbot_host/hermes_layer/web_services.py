@@ -167,20 +167,42 @@ window.AstrBotPluginPage = {
                 f"astrbot_plugin_livingmemory/{cleaned}",
                 cleaned,
             ]
-            registered = None
+
+            # registered_web_apis 是上游语义的 (route, handler, methods, desc)
+            # 列表：同路由不同方法的注册共存，先按路由收集全部，再按请求方法挑
+            def _api_parts(api: Any) -> tuple[str, Any, list[str]]:
+                if isinstance(api, dict):
+                    return (
+                        str(api.get("route", "")),
+                        api.get("handler"),
+                        [str(m).upper() for m in (api.get("methods") or ["GET"])],
+                    )
+                return str(api[0]), api[1], [str(m).upper() for m in (api[2] or ["GET"])]
+
+            all_apis = [_api_parts(api) for api in context.registered_web_apis]
+            specs: list[tuple[str, Any, list[str]]] = []
             for cand in candidates:
-                if cand in context.registered_web_apis:
-                    registered = context.registered_web_apis[cand]
+                specs = [s for s in all_apis if s[0].strip("/") == cand.strip("/")]
+                if specs:
                     break
-            
-            if not registered:
-                for k, v in context.registered_web_apis.items():
-                    if k.strip("/").endswith(cleaned) or cleaned.endswith(k.strip("/")):
-                        registered = v
+
+            if not specs:
+                for route, _h, _m in all_apis:
+                    r = route.strip("/")
+                    if r.endswith(cleaned) or cleaned.endswith(r):
+                        specs = [(route, _h, _m)]
                         break
 
-            if not registered:
+            if not specs:
                 raise HTTPException(404, f"unknown LivingMemory page route: {path}")
+
+            handler = None
+            for _route, candidate_handler, methods in specs:
+                if request.method in methods:
+                    handler = candidate_handler
+                    break
+            if handler is None:
+                raise HTTPException(405, "method_not_allowed")
             
             # 手动反思总结与记忆整合联动
             if cleaned in ("consolidation/run", "page/consolidation/run"):
@@ -226,7 +248,7 @@ window.AstrBotPluginPage = {
                 query_string=query_params,
                 json=body
             ):
-                return await registered["handler"]()
+                return await handler()
 
         return app
 

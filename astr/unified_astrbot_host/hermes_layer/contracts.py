@@ -22,6 +22,37 @@ Verdict = Literal["direct", "auto", "ignore"]
 VERDICTS: tuple[str, ...] = ("direct", "auto", "ignore")
 
 
+def _extract_at_targets(payload: dict[str, Any]) -> list[str]:
+    """从 HTTP body 提取被 @ 的用户 QQ 号列表（去重保序）。
+
+    两个来源，显式清单优先：
+    1. ``atTargets`` / ``at_targets`` —— 调用方直接给字符串数组
+    2. ``segments`` —— OneBot 消息段数组，抽 ``type=at`` 段的 ``data.qq``。
+       桥接的命令中继把完整 segments 放在 body 里，这里不认它的话
+       @ 的 QQ 号就在 from_payload 处丢失。
+    """
+    explicit = payload.get("atTargets") or payload.get("at_targets")
+    if isinstance(explicit, list) and explicit:
+        out = [str(t) for t in explicit if t not in (None, "")]
+        return list(dict.fromkeys(out))
+
+    segments = payload.get("segments")
+    if not isinstance(segments, list):
+        return []
+    out: list[str] = []
+    for seg in segments:
+        if not isinstance(seg, dict) or seg.get("type") != "at":
+            continue
+        data = seg.get("data") if isinstance(seg.get("data"), dict) else {}
+        qq = data.get("qq") or seg.get("qq")
+        if qq in (None, ""):
+            continue
+        qq = str(qq)
+        if qq not in out:
+            out.append(qq)
+    return out
+
+
 @dataclass
 class InboundMessage:
     """一条从 Bridge v2 送进来的群消息。"""
@@ -42,6 +73,13 @@ class InboundMessage:
     reply_to: str = ""
     role: str = "member"
     timestamp: float = field(default_factory=time.time)
+    #: 被 @ 的用户 QQ 号（不含 bot 自身，去重保序）。
+    #:
+    #: 插件命令（如 Favour Ultra 的 /冷暴力 @某人）从消息链的 At 组件里取
+    #: 目标 QQ 号（main.py _get_target_uid），昵称文本无法反查。桥接命令中继
+    #: 把 OneBot segments 原样放在 body 里，@ 的 QQ 号只存在于 at 段 ——
+    #: from_payload 必须把它捞出来，build_event 才能重建成 At 组件。
+    at_targets: list[str] = field(default_factory=list)
     #: 原始 OneBot 事件，插件里少数分支会读它
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -97,6 +135,7 @@ class InboundMessage:
             reply_to=sid("replyTo", "reply_to"),
             role=str(payload.get("role") or "member"),
             timestamp=float(payload.get("timestamp") or time.time()),
+            at_targets=_extract_at_targets(payload),
             raw=dict(payload.get("raw") or payload.get("rawMessage") or payload.get("raw_message") or {} if isinstance(payload.get("raw") or payload.get("rawMessage") or payload.get("raw_message"), dict) else {}),
         )
 

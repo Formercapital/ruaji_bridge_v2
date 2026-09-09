@@ -348,7 +348,12 @@ class Context:
         self._default_provider: Provider | None = None
 
         self.llm_tools = FunctionToolManager()
-        self.registered_web_apis: dict[str, Any] = {}
+        # 上游语义（astrbot/core/star/context.py）：list[RegisteredWebApi]，
+        # RegisteredWebApi = (route, handler, methods, desc)。同路由+同方法 →
+        # 替换；同路由+不同方法 → 共存。Favour Ultra 的 /config 就是 GET/POST
+        # 各一个 handler 的双注册，按 route 覆盖会把 GET spec 冲掉，插件页面
+        # apiGet('config') 全部 405 method_not_allowed。
+        self.registered_web_apis: list[tuple[str, Any, list[str], str]] = []
         self.registered_web_pages: list[dict[str, Any]] = []
 
         self.message_history_manager = _InMemoryHistoryManager()
@@ -526,15 +531,19 @@ class Context:
         宿主把它们挂到 /api/v1/plugin/<route> 下统一对外，
         插件自身不再各起一个 web 服务（旧实现里 GCP 起 :1451、
         SelfLearning 起 :8876、LivingMemory 起 :8878，三份 uvicorn）。
+
+        存储对齐上游：同路由+同方法 → 原位替换；同路由+不同方法 → 共存
+        （上游 astrbot/core/star/context.py register_web_api 的既定语义，
+        生态插件按此惯例把一个端点的 GET/POST 分别注册两个 handler）。
         """
-        self.registered_web_apis[route] = {
-            "route": route,
-            "handler": view_handler,
-            "methods": [m.upper() for m in (methods or ["GET"])],
-            "desc": desc,
-            "extras": kwargs,
-        }
-        logger.info("插件注册了 Web API: %s %s", ",".join(methods or ["GET"]), route)
+        normalized = [m.upper() for m in (methods or ["GET"])]
+        for idx, api in enumerate(self.registered_web_apis):
+            if api[0] == route and api[2] == normalized:
+                self.registered_web_apis[idx] = (route, view_handler, normalized, desc)
+                logger.info("插件替换了 Web API: %s %s", ",".join(normalized), route)
+                return
+        self.registered_web_apis.append((route, view_handler, normalized, desc))
+        logger.info("插件注册了 Web API: %s %s", ",".join(normalized), route)
 
     def register_web_page(self, name: str, route: str, path: str | None = None, **kwargs: Any) -> None:
         self.registered_web_pages.append({"name": name, "route": route, "path": path, **kwargs})

@@ -98,6 +98,12 @@ def build_event(message: InboundMessage, self_id: str = "", send_hook=None) -> A
     chain: list[Any] = []
     if message.at_bot:
         chain.append(At(qq=effective_self_id, name=""))
+    # 被命令 @ 的目标用户重建成 At 组件。Favour Ultra 的 _get_target_uid 优先
+    # 从消息链 At 组件取 QQ 号（昵称文本无法反查），桥接中继只把 @ 的 QQ 号
+    # 放在 segments 里 —— 不重建的话 /冷暴力 @某人 会报"未找到目标用户"。
+    for uid in message.at_targets:
+        if uid and uid != effective_self_id:
+            chain.append(At(qq=uid, name=""))
     # 模型正文（content）优先：CQ 码已由桥接转成 "@昵称"，插件钩子（含 GCP
     # 的 MessageCleaner/GCP 提取链）看到的是可读正文。text 只是它的去 @ 兜底。
     body = message.content or message.text

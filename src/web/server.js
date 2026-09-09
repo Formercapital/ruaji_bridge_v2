@@ -26,7 +26,7 @@ import { createConfigApi } from './api/config.js';
 import { createHostApi } from './api/host.js';
 import { createPortrayalApi } from './api/portrayal.js';
 import { createPluginsConfigApi } from './api/plugins-config.js';
-import { handlePluginProxy } from './proxy.js';
+import { handlePluginProxy, handleUnifiedHostProxy } from './proxy.js';
 
 const PUBLIC_DIR = path.resolve(fileURLToPath(import.meta.url), '../public');
 
@@ -106,6 +106,13 @@ export class WebServer {
 
     if (pathname.startsWith('/proxy/plugin/')) {
       return handlePluginProxy(req, res, pathname);
+    }
+
+    // 宿主原生插件页面（/plug/{key}/page|assets|api）同源透传到统一宿主。
+    // 门户清单里的 URL 是宿主相对路径，iframe 在面板端口上解析，
+    // 本端口不接管就会 404（插件门户好感度页曾因此打不开）。
+    if (pathname.startsWith('/plug/')) {
+      return handleUnifiedHostProxy(req, res, pathname, this.config?.unifiedHost?.baseUrl ?? 'http://127.0.0.1:8870');
     }
 
     if (pathname.startsWith('/api/')) {
