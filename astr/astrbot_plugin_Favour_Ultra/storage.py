@@ -58,7 +58,7 @@ class FavourRecord(SQLModel, table=True):
 
 class FavourDBManager:
     """基于SQLite的好感度数据库管理器"""
-    def __init__(self, data_dir: Path, min_val: int = -100, max_val: int = 100, owner_ids=None):
+    def __init__(self, data_dir: Path, min_val: int = -100, max_val: int = 100, owner_ids=None, owner_session_key: str = ""):
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "favour.db"
@@ -68,7 +68,10 @@ class FavourDBManager:
         # 桥接补丁（合同：主人守卫-数据库写入口）。主人记录在所有写路径上
         # 恒为 满分 + 亲密 + 排他；删除与衰减一律拒绝。评分/全局修改/面板
         # 单条编辑/清空/删除全部经过这里，是真正的 chokepoint。
+        # owner_session_key：主人记录所在的共享会话键（宿主 platform.id，
+        # 与运行时精确查找同键）；缺席时回落上游 'global' 约定。
         self.owner_ids = {str(x) for x in owner_ids} if owner_ids else set()
+        self.owner_session_key = str(owner_session_key or "global")
         
         # 创建异步引擎（优化 SQLite 并发：限制连接池 + busy timeout）
         self.engine = create_async_engine(
@@ -256,7 +259,7 @@ class FavourDBManager:
                 for uid in self.owner_ids:
                     stmt = select(FavourRecord).where(
                         FavourRecord.user_id == uid,
-                        FavourRecord.session_id == "global"
+                        FavourRecord.session_id == self.owner_session_key
                     )
                     record = (await session.execute(stmt)).scalars().first()
                     if not record:

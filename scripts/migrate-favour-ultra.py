@@ -11,6 +11,11 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--owner-id', default='')
+    # 运行时共享会话键 = 宿主垫片平台 id（_PLATFORM.id = 'aiocqhttp'，
+    # 对齐上游 QQ 适配器命名）。插件全局模式按 unified_msg_origin 的
+    # 平台段（origin.split(':')[0]）精确查找。桥接的 'qq:...' 只出现在
+    # 会话段里，不参与键计算。
+    parser.add_argument('--session-key', default='aiocqhttp')
     args = parser.parse_args()
 
     source = Path(args.source).resolve()
@@ -37,10 +42,12 @@ def main():
         except (TypeError, ValueError):
             numeric = 0
         favour = max(-200, min(149, round(numeric)))
-        records.append((str(uid), 'global', favour, '', 0,
+        records.append((str(uid), args.session_key, favour, '', 0,
                         str(entry.get('nickname') or entry.get('name') or ''), now, now, now))
+    # 主人行与群友行同键（运行时共享会话键）：查询命令按该键精确查找，
+    # ensure_owner_records 也以同键重建，三处一致。
     if args.owner_id:
-        records.append((str(args.owner_id), 'global', 1000, '亲密', 1, '主人', now, now, now))
+        records.append((str(args.owner_id), args.session_key, 1000, '亲密', 1, '主人', now, now, now))
 
     with sqlite3.connect(db_path) as db:
         db.execute('''CREATE TABLE favour_records (
@@ -67,6 +74,7 @@ def main():
     report.write_text(json.dumps({
         'source': str(source), 'snapshot': str(snapshot),
         'target': str(db_path), 'imported': len(records),
+        'sessionKey': args.session_key,
         'records': [
             {'user_id': row[0], 'favour': row[2], 'relationship': row[3],
              'is_unique': bool(row[4])}
@@ -76,6 +84,7 @@ def main():
     marker.write_text(json.dumps({
         'source': str(source), 'snapshot': str(snapshot),
         'target': str(db_path), 'report': str(report),
+        'sessionKey': args.session_key,
         'completedAt': datetime.now().isoformat(),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({'ok': True, 'target': str(db_path), 'imported': len(records)}, ensure_ascii=False))

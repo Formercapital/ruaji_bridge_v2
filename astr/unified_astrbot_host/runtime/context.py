@@ -74,15 +74,18 @@ class UnifiedContext:
         self.data_root = data_root
 
         # AstrBot 框架配置兼容键：插件按 AstrBot 惯例从
-        # context.get_config() 读这三个键（admins_id / data / plugin.data_dir）。
+        # context.get_config() 读这几个键（admins_id / data / plugin.data_dir）。
         # admins_id 对应 AstrBot 的 superuser 体系，这里直接桥到宿主
         # identity.owner_id（唯一主人来源）；data/plugin.data_dir 是插件
-        # 落数据目录的标准入口。属于框架语义补全，不含任何插件名。
+        # 落数据目录的标准入口。platform.id 是垫片呈现的平台名（与
+        # GCP 缓存键等处的 aiocqhttp 命名一致），供需要按平台前缀定位
+        # 共享会话键的插件使用。属于框架语义补全，不含任何插件名。
         _identity = config.get("identity") or {}
         _owner_id = str(_identity.get("owner_id") or "")
         config.setdefault("admins_id", [_owner_id] if _owner_id else [])
         config.setdefault("data", data_root)
         config.setdefault("plugin.data_dir", data_root)
+        config.setdefault("platform.id", "aiocqhttp")
 
         self.gateway: GatewayClient = build_from_config(config)
         self.context = Context(config=config, data_dir=data_root)

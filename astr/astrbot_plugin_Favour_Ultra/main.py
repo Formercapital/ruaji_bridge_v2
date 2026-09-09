@@ -144,7 +144,13 @@ class FavourManagerTool(Star):
 
         # 数据库初始化（主人记录守卫下沉到 DB 写入口：评分/全局修改/面板编辑/清空/删除/衰减全走这里）
         self.data_dir = Path(context.get_config().get("plugin.data_dir", "./data")) / "plugin_data" / "astrbot_plugin_favour_ultra"
-        self.db_manager = FavourDBManager(self.data_dir, self.min_favour_value, self.max_favour_value, owner_ids=self.admins_id)
+        # 主人记录落在运行时共享会话键上（宿主 platform.id），与精确查找同键，
+        # 查询命令/页面/注入看到的主人恒为满分。缺席回落上游 'global'。
+        _shared_key = str(context.get_config().get("platform.id") or "") if context.get_config() else ""
+        self.db_manager = FavourDBManager(
+            self.data_dir, self.min_favour_value, self.max_favour_value,
+            owner_ids=self.admins_id, owner_session_key=_shared_key,
+        )
         
         # 异步初始化数据库和迁移数据
         asyncio.create_task(self._init_storage())
