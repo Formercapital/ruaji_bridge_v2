@@ -150,6 +150,13 @@ function normalizeManifest(raw) {
         metadata: c.metadata ?? null,
         dedupeKey: c.dedupeKey ?? null,
         scope: c.scope ?? null,
+        // 熔断参数按能力覆盖：同一插件的不同能力对失败容忍度可能完全不同
+        // （context.enrich 偶发超时只想快速重试，decision 卡死要尽快熔断保住
+        // 回复延迟），未声明时回落插件级 breaker。
+        breaker: Object.freeze({
+          threshold: c.breaker?.threshold ?? raw.breaker?.threshold ?? 3,
+          cooldownMs: c.breaker?.cooldownMs ?? raw.breaker?.cooldownMs ?? 60000,
+        }),
       })),
     ),
     timeouts: Object.freeze({

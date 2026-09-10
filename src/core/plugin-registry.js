@@ -109,8 +109,8 @@ export class PluginRegistry {
       priority: cap.priority,
       timeoutMs: cap.timeoutMs,
       retry: manifest.retry,
-      breakerThreshold: manifest.breaker.threshold,
-      breakerCooldownMs: manifest.breaker.cooldownMs,
+      breakerThreshold: cap.breaker.threshold,
+      breakerCooldownMs: cap.breaker.cooldownMs,
       validate,
       invoke: async (input, ctx) => {
         if (manifest.transport !== 'http') {

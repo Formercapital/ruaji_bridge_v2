@@ -88,6 +88,68 @@ test('CircuitBreakerRegistry 按 key 复用同一个熔断器', () => {
   assert.equal(registry.getStatusAll().length, 2);
 });
 
+// ===== manifest 熔断参数按能力覆盖 =====
+
+test('能力级 breaker 覆盖插件级默认（context.enrich 宽松、decision 严格）', async () => {
+  const { loadManifests } = await import('../../src/plugins/manifest-loader.js');
+  const { PluginRegistry } = await import('../../src/core/plugin-registry.js');
+  const { EventBus } = await import('../../src/core/event-bus.js');
+  const { CapabilityBus } = await import('../../src/core/capability-bus.js');
+  const { createTestLogger } = await import('../helpers.js');
+
+  const logger = createTestLogger();
+  const { manifests } = loadManifests(
+    [
+      {
+        id: 'p1',
+        version: '1.0.0',
+        enabled: true,
+        transport: 'http',
+        baseUrl: 'http://127.0.0.1:9999',
+        capabilities: [
+          { name: 'context.enrich', path: '/c', method: 'POST', breaker: { threshold: 6, cooldownMs: 15000 } },
+          { name: 'decision.group_reply', path: '/d', method: 'POST' },
+        ],
+        breaker: { threshold: 3, cooldownMs: 60000 },
+      },
+    ],
+    { logger },
+  );
+
+  // 归一化层：能力级覆盖 > 插件级 > 默认
+  const [enrich, decision] = manifests[0].capabilities;
+  assert.equal(enrich.breaker.threshold, 6);
+  assert.equal(enrich.breaker.cooldownMs, 15000);
+  assert.equal(decision.breaker.threshold, 3, '未声明能力级时回落插件级');
+  assert.equal(decision.breaker.cooldownMs, 60000);
+
+  // 注册层：按能力生效不同阈值
+  const capabilityBus = new CapabilityBus({ logger });
+  const registry = new PluginRegistry({
+    eventBus: new EventBus({ logger }),
+    capabilityBus,
+    logger,
+    fetchImpl: async () => { throw new Error('unreachable'); },
+  });
+  registry.registerManifest(manifests[0]);
+
+  // context.enrich 连续失败 3 次（达到插件级阈值但未达能力级阈值）：仍可用。
+  // collect() 对失败 Provider 静默丢弃不抛异常，这里只看熔断状态。
+  for (let i = 0; i < 3; i++) {
+    await capabilityBus.collect('context.enrich', {}, { sessionId: 's' });
+  }
+  assert.equal(capabilityBus.listProviders('context.enrich')[0].circuit.state, 'closed',
+    '能力级 threshold=6 未达，熔断不得打开');
+
+  // decision 达到插件级阈值 3：打开。requestOrNull 失败返回 null 不抛。
+  for (let i = 0; i < 3; i++) {
+    const r = await capabilityBus.requestOrNull('decision.group_reply', {}, { sessionId: 's' });
+    assert.equal(r, null);
+  }
+  assert.equal(capabilityBus.listProviders('decision.group_reply')[0].circuit.state, 'open',
+    '插件级 threshold=3 达到，熔断必须打开');
+});
+
 // ===== 幂等 =====
 
 test('同一个键只能占用一次', () => {
