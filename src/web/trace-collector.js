@@ -250,6 +250,7 @@ export class TraceCollector {
         chars: (b.text ?? '').length,
         truncatedReason: b.truncatedReason ?? null,
         preview: truncate(b.text ?? '', 240),
+        text: truncate(b.text ?? '', 4000),
       })),
     };
     this._push(trace, {
@@ -265,6 +266,27 @@ export class TraceCollector {
     const trace = this._ensure(correlationId, {});
     trace.status = TRACE_STATUS.ERROR;
     trace.error = message;
+    return trace;
+  }
+
+  /**
+   * 记录最终注入模型的前 prompt。llm.request 事件只带长度计数（正文走
+   * 事件总线的代价太高，订阅者也不需要），所以由 ReplyFlow 在构建完
+   * messages 之后显式补录 —— 面板上"到底注入了啥"以这里为唯一真身。
+   * 超长时按上限截断记录，trace 是纯内存环形缓冲，不能让极端长 prompt 吃穿内存。
+   */
+  recordPrompt(correlationId, { model, systemText, userMessage, messageCount }) {
+    const trace = this._ensure(correlationId, {});
+    trace.prompt = {
+      model: model ?? null,
+      systemText: truncate(systemText ?? '', 20000),
+      systemTextChars: (systemText ?? '').length,
+      userMessage: truncate(userMessage ?? '', 20000),
+      userMessageChars: (userMessage ?? '').length,
+      messageCount: messageCount ?? null,
+      truncated: (systemText ?? '').length > 20000 || (userMessage ?? '').length > 20000,
+      recordedAt: this.now(),
+    };
     return trace;
   }
 
@@ -358,6 +380,7 @@ export class TraceCollector {
       decision: null,
       context: null,
       llm: null,
+      prompt: null,
       sent: null,
       error: null,
       messageId: null,

@@ -31,7 +31,12 @@ export function createResultDecorateMiddleware(deps) {
      * @param {Function} next
      */
     async process(context, next) {
-      if (!context.text || !capabilityBus || !capabilityBus.has(CAPABILITIES.RESULT_DECORATE)) {
+      // Favour 结算合同：收尾轮 ctx.text 恒为空（副作用轮不产出可见文本），
+      // 但宿主的 OnDecoratingResultEvent 必须在收尾轮跑一次——插件靠它弹出
+      // llm.response 暂存的评分并写库。空文本守卫只能拦非收尾轮，
+      // 否则暂存永远无人消费，好感度数据永远不落库。
+      const hasPayload = Boolean(context.text) || context.isFinalPass === true;
+      if (!hasPayload || !capabilityBus || !capabilityBus.has(CAPABILITIES.RESULT_DECORATE)) {
         return next(context);
       }
 

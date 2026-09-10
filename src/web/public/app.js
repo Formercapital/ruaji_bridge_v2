@@ -221,8 +221,16 @@ async function renderTraceDetail(id) {
       <td class="mono">${esc(b.truncatedReason ?? '—')}</td>
     </tr>`).join('');
 
+  const ctxBlockTexts = (t.context?.blocks ?? []).map((b) => `
+    <details><summary>${esc(b.source)} · ${esc(b.slot)} · P${b.priority} · ${b.chars} 字符${b.truncatedReason ? ` · <span style="color:var(--warn)">${esc(b.truncatedReason)}</span>` : ''}</summary>
+      <pre class="code">${esc(b.text ?? b.preview ?? '(空块)')}</pre>
+      ${(b.text ?? '').length < b.chars ? '<p class="hint">正文超长，仅保留前 4000 字符。</p>' : ''}
+    </details>`).join('');
+
   const dropped = (t.context?.dropped ?? []).map((x) =>
     `<div><span class="k">${esc(x.source)}</span><span class="v">${esc(x.reason)}</span></div>`).join('');
+
+  const p = t.prompt;
 
   $('#trace-detail').innerHTML = `
     <h3>${esc(t.displayName ?? '?')} · <span class="tag ${esc(t.decision?.route ?? t.status)}">${esc(t.decision?.route ?? t.status)}</span></h3>
@@ -255,7 +263,23 @@ async function renderTraceDetail(id) {
       <tbody>${ctxRows || '<tr><td colspan="5" class="empty">本轮没有注入上下文块</td></tr>'}</tbody>
     </table></div>
     <p class="hint" style="margin-top:6px">预算 ${t.contextBudget.usedChars} / ${t.contextBudget.totalCharacterBudget} 字符（单来源上限 ${t.contextBudget.perSourceCharacterBudget}）</p>
+    ${ctxBlockTexts ? `<details open><summary>各块注入正文 (${(t.context?.blocks ?? []).length})</summary>${ctxBlockTexts}</details>` : ''}
     ${dropped ? `<details><summary>被丢弃/截断的块 (${(t.context?.dropped ?? []).length})</summary><div class="kv-list">${dropped}</div></details>` : ''}
+
+    <h3 style="margin-top:16px">最终注入 Prompt</h3>
+    ${p ? `
+      <div class="kv-list">
+        <div><span class="k">模型</span><span class="v mono">${esc(p.model ?? '—')}</span></div>
+        <div><span class="k">消息条数</span><span class="v mono">${esc(p.messageCount ?? '—')}</span></div>
+        <div><span class="k">System 长度</span><span class="v mono">${p.systemTextChars} 字符</span></div>
+        <div><span class="k">User 长度</span><span class="v mono">${p.userMessageChars} 字符</span></div>
+      </div>
+      <p class="hint" style="margin:6px 0">以下就是模型实际收到的文本。</p>
+      <details open><summary>System Prompt（${p.systemTextChars} 字符${p.truncated ? '，超长已截断' : ''}）</summary>
+        <pre class="code">${esc(p.systemText || '(空)')}</pre></details>
+      <details><summary>User 消息（${p.userMessageChars} 字符${p.truncated ? '，超长已截断' : ''}）</summary>
+        <pre class="code">${esc(p.userMessage || '(空)')}</pre></details>
+    ` : '<p class="empty">本轮没有记录注入 prompt（LLM 未被调用，或记录发生在旧版本运行期间）。</p>'}
 
     <details><summary>原始 JSON</summary><pre class="code">${esc(JSON.stringify(t, null, 2))}</pre></details>`;
 }

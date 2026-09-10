@@ -186,6 +186,47 @@ test('recordContext 保留每块的字符数与截断原因', () => {
   assert.deepEqual(ctx.dropped, [{ source: 'local-window', reason: 'deduped' }]);
 });
 
+test('recordContext 保存块正文（面板"到底注入了啥"的真身），超长截断到 4000', () => {
+  const collector = new TraceCollector();
+  collector.recordContext('c1', {
+    blocks: [{ source: 'gcp', priority: 90, text: 'x'.repeat(9999) }],
+    stats: {},
+  });
+
+  const [block] = collector.get('c1').context.blocks;
+  assert.equal(block.chars, 9999, 'chars 记原始长度');
+  assert.equal(block.text.length, 4001, 'text 截断到 4000 + 省略号');
+  assert.ok(block.text.endsWith('…'));
+});
+
+test('recordPrompt 记录最终注入的 system 与 user 正文', () => {
+  const collector = new TraceCollector();
+  collector.recordPrompt('c1', {
+    model: 'hermes-agent',
+    systemText: '你是瑞姬\n<FavourContext>好感度 90</FavourContext>',
+    userMessage: '群友A: 瑞姬在吗',
+    messageCount: 2,
+  });
+
+  const p = collector.get('c1').prompt;
+  assert.equal(p.model, 'hermes-agent');
+  assert.ok(p.systemText.includes('<FavourContext>'));
+  assert.equal(p.systemTextChars, '你是瑞姬\n<FavourContext>好感度 90</FavourContext>'.length);
+  assert.equal(p.userMessage, '群友A: 瑞姬在吗');
+  assert.equal(p.messageCount, 2);
+  assert.equal(p.truncated, false);
+});
+
+test('recordPrompt 超长截断并置 truncated 标记', () => {
+  const collector = new TraceCollector();
+  collector.recordPrompt('c1', { systemText: 's'.repeat(25000), userMessage: 'u' });
+
+  const p = collector.get('c1').prompt;
+  assert.equal(p.systemTextChars, 25000, 'Chars 记原始长度');
+  assert.equal(p.systemText.length, 20001, '正文截断到 20000 + 省略号');
+  assert.equal(p.truncated, true);
+});
+
 test('list() 支持按 correlationId / 文本 / 昵称 检索，并按时间倒序', () => {
   const collector = new TraceCollector();
   collector._ensure('aaa-1', { text: '今天天气不错', displayName: '张三', messageId: 'm1' });
@@ -203,10 +244,12 @@ test('list() 的摘要不含 spans 与上下文正文（防止一次拉回几 MB
   const t = collector._ensure('c1', { text: 'x' });
   collector._push(t, { name: 'a', category: 'llm', elapsedMs: 1 });
   collector.recordContext('c1', { blocks: [{ source: 's', text: 'y'.repeat(9999) }], stats: {} });
+  collector.recordPrompt('c1', { systemText: 's'.repeat(25000), userMessage: 'u' });
 
   const [row] = collector.list({});
   assert.equal(row.spans, undefined);
   assert.equal(row.context, undefined);
+  assert.equal(row.prompt, undefined);
   assert.equal(row.spanCount, 2); // 一条 push + 一条 recordContext 的 span
 });
 

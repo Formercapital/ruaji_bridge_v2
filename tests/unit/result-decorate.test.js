@@ -81,3 +81,93 @@ test('result-decorate 中间件：Provider 报错平滑降级，不抛出异常�
   assert.equal(ctx.text, '原始保底文本');
   assert.equal(ctx.cancelled, false);
 });
+
+test('result-decorate 中间件：收尾轮空文本也必须调用宿主（Favour 暂存消费合同）', async () => {
+  const calls = [];
+  const capabilityBus = new CapabilityBus();
+  capabilityBus.register({
+    id: 'settle-provider',
+    capability: CAPABILITIES.RESULT_DECORATE,
+    invoke: async (input) => {
+      calls.push(input);
+      return { text: '已消费暂存' };
+    },
+  });
+
+  const mw = createResultDecorateMiddleware({ capabilityBus });
+  const inbound = { messageId: 'msg-100', userId: '1001', groupId: '123', sessionId: 'qq:group:123', messageType: 'group', text: '你好' };
+  const ctx = createTransformContext({
+    text: '',
+    rawText: '今天也辛苦啦[好感度上升:5]',
+    isFinalPass: true,
+    correlationId: 'c5',
+    sessionId: 'qq:group:123',
+    inbound,
+  });
+
+  let nextCalled = false;
+  await mw.process(ctx, (c) => {
+    nextCalled = true;
+    return c;
+  });
+
+  assert.equal(calls.length, 1, '收尾轮必须恰好调用一次宿主 decorate');
+  assert.equal(calls[0].rawText, '今天也辛苦啦[好感度上升:5]', '收尾轮要带完整原文，宿主侧用它构造 OnDecoratingResultEvent');
+  assert.equal(calls[0].inbound.messageId, 'msg-100', '收尾轮消息键必须与 llm.response 暂存键一致');
+  assert.equal(nextCalled, true);
+  assert.equal(ctx.cancelled, false);
+});
+
+test('result-decorate 中间件：非收尾轮空文本仍然跳过（不打无意义的空请求）', async () => {
+  let invokeCount = 0;
+  const capabilityBus = new CapabilityBus();
+  capabilityBus.register({
+    id: 'skip-provider',
+    capability: CAPABILITIES.RESULT_DECORATE,
+    invoke: async () => {
+      invokeCount += 1;
+      return { text: '不该出现' };
+    },
+  });
+
+  const mw = createResultDecorateMiddleware({ capabilityBus });
+  const ctx = createTransformContext({ text: '', isFinalPass: false, correlationId: 'c6', sessionId: 's6' });
+
+  let nextCalled = false;
+  await mw.process(ctx, (c) => {
+    nextCalled = true;
+    return c;
+  });
+
+  assert.equal(invokeCount, 0, '非收尾轮空文本不应调用宿主');
+  assert.equal(nextCalled, true);
+});
+
+test('result-decorate 中间件：收尾轮宿主报错平滑降级，不影响后续', async () => {
+  const capabilityBus = new CapabilityBus();
+  capabilityBus.register({
+    id: 'final-error-provider',
+    capability: CAPABILITIES.RESULT_DECORATE,
+    invoke: async () => {
+      throw new Error('host down');
+    },
+  });
+
+  const mw = createResultDecorateMiddleware({ capabilityBus });
+  const ctx = createTransformContext({
+    text: '',
+    rawText: '完整原文',
+    isFinalPass: true,
+    correlationId: 'c7',
+    sessionId: 's7',
+  });
+
+  let nextCalled = false;
+  await mw.process(ctx, (c) => {
+    nextCalled = true;
+    return c;
+  });
+
+  assert.equal(nextCalled, true, '收尾轮宿主失败必须降级放行');
+  assert.equal(ctx.cancelled, false);
+});

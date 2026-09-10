@@ -23,6 +23,7 @@ import { renderSystemText } from '../../src/orchestration/prompt-renderer.js';
 import { stripFavourTags } from '../../src/middleware/favour-tags.js';
 import { ReplyFlow } from '../../src/orchestration/reply-flow.js';
 import { EVENTS } from '../../src/contracts/events.js';
+import { TraceCollector } from '../../src/web/trace-collector.js';
 import { createAffectionApi } from '../../src/web/api/affection.js';
 
 function makeLogger(warns = []) {
@@ -43,6 +44,7 @@ function buildSettlementHarness({ publishImpl, logger }) {
   const events = [];
   const pipelineCalls = [];
   const enqueued = [];
+  const collector = new TraceCollector();
 
   const eventBus = {
     publish: (envelope) => {
@@ -86,6 +88,7 @@ function buildSettlementHarness({ publishImpl, logger }) {
       reply: { settlementTimeoutMs: 500 },
     },
     logger: logger ?? makeLogger(),
+    traceCollector: collector,
   });
 
   const inbound = {
@@ -102,7 +105,7 @@ function buildSettlementHarness({ publishImpl, logger }) {
     text: '你好',
   };
 
-  return { flow, inbound, events, pipelineCalls, enqueued };
+  return { flow, inbound, events, pipelineCalls, enqueued, collector };
 }
 
 test('结算时序：llm.response 恰好一次、先于收尾轮、同步等待宿主暂存完成', async () => {
@@ -145,6 +148,29 @@ test('结算时序：派发超时只跳过本轮结算，不阻断收尾轮与�
   assert.equal(pipelineCalls.length, 1, '超时降级后收尾轮照常执行');
   assert.ok(enqueued.length > 0, '文本照常进入发送队列');
   assert.ok(warns.some((w) => String(w).includes('结算')), '超时必须留下明确记录');
+});
+
+test('全链路追踪：run() 把最终注入的 prompt 补录进 trace', async () => {
+  const { flow, inbound, collector } = buildSettlementHarness({});
+
+  await flow.run({
+    inbound,
+    triggerType: 'at',
+    contextBlocks: [{ source: 'living-memory', text: '昨天聊过猫猫', metadata: { slot: 'extra' }, priority: 50 }],
+    signal: undefined,
+  });
+
+  const trace = collector.get('corr-1');
+  assert.ok(trace, 'trace 已建立');
+
+  const p = trace.prompt;
+  assert.ok(p, 'prompt 已补录');
+  assert.equal(p.model, 'test-model');
+  assert.equal(p.messageCount, 2, 'system + user 两条消息');
+  assert.ok(p.systemText.includes('昨天聊过猫猫'), 'context 块正文进入 systemText');
+  assert.ok(p.systemText.includes('群友甲'), '用户身份头进入 systemText');
+  assert.ok(p.userMessage.includes('你好'), '用户原话进入 userMessage');
+  assert.equal(p.truncated, false);
 });
 
 const ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));

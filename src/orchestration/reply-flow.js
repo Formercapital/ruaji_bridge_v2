@@ -37,8 +37,9 @@ export class ReplyFlow {
    * @param {import('../core/health-manager.js').HealthManager} [opts.health]
    * @param {object} opts.config
    * @param {import('../core/logger.js').Logger} opts.logger
-   * @param {import('./fast-ack.js').FastAckDispatcher} [opts.fastAck]
-   * @param {import('./meme-matcher.js').MemeMatcher} [opts.memeMatcher]
+   * @param {import('../orchestration/fast-ack.js').FastAckDispatcher} [opts.fastAck]
+   * @param {import('../orchestration/meme-matcher.js').MemeMatcher} [opts.memeMatcher]
+   * @param {import('../web/trace-collector.js').TraceCollector} [opts.traceCollector]
    */
   constructor(opts = {}) {
     this.models = opts.modelRouter;
@@ -51,6 +52,7 @@ export class ReplyFlow {
     this.config = opts.config;
     this.fastAck = opts.fastAck ?? null;
     this.memeMatcher = opts.memeMatcher ?? null;
+    this.trace = opts.traceCollector ?? null;
     this.log = opts.logger?.child({ component: 'reply-flow' }) ?? console;
   }
 
@@ -102,6 +104,15 @@ export class ReplyFlow {
         },
       }),
     );
+
+    // 全链路追踪补录：面板要能看到"最终注入了啥"，事件总线里只放计数，
+    // 正文在这里直接交给采集器（与 recordDecision/recordContext 同一模式）
+    this.trace?.recordPrompt(inbound.correlationId, {
+      model: modelRequest.model,
+      systemText: systemText.trim(),
+      userMessage,
+      messageCount: messages.length,
+    });
 
     const isProactive = triggerType === TRIGGER_TYPES.AI_DECISION;
     const splitter = new SentenceSplitter();

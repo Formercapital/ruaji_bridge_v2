@@ -20,7 +20,6 @@ bridge.config.json
 # ==========================================
 .cache/
 shadow/
-tests/
 *.log
 *.log.*
 *.tmp*

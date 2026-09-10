@@ -282,6 +282,7 @@ export function createContainer(config, overrides = {}) {
     logger,
     fastAck,
     memeMatcher,
+    traceCollector,
   });
   const decisionFlow = new DecisionFlow({
     capabilityBus,
