@@ -174,14 +174,22 @@ export class CapabilityBus {
       }
       const provider = candidates[i];
       const classified = classifyError(entry.reason, ctx.correlationId);
-      if (!(entry.reason instanceof CircuitOpenError)) {
-        this.log.warn('聚合调用中单个 Provider 失败，已丢弃其结果', {
+      if (entry.reason instanceof CircuitOpenError) {
+        // 熔断跳过不留 span（assertCanAttempt 在计时前抛出），不写这条日志的话
+        // 表现就是"注入整条静默消失"——trace 里连失败的调用都看不到。
+        this.log.warn('聚合调用中 Provider 熔断打开，本轮跳过其全部贡献', {
           capability,
           providerId: provider.id,
           correlationId: ctx.correlationId,
-          error: classified.message,
         });
+        continue;
       }
+      this.log.warn('聚合调用中单个 Provider 失败，已丢弃其结果', {
+        capability,
+        providerId: provider.id,
+        correlationId: ctx.correlationId,
+        error: classified.message,
+      });
     }
     return out;
   }
