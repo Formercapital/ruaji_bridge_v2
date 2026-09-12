@@ -1102,6 +1102,7 @@ async function renderSettings() {
   $('#cfg-napcat-ws').value = d.config.napcat?.wsUrl ?? '';
   $('#cfg-napcat-http').value = d.config.napcat?.httpUrl ?? '';
   $('#cfg-napcat-token').value = d.config.napcat?.accessTokenMasked ?? '';
+  $('#cfg-input-status').checked = d.config.napcat?.inputStatusEnabled !== false;
   $('#cfg-unified-host').value = d.config.unifiedHost?.baseUrl ?? '';
 }
 
@@ -1159,6 +1160,7 @@ async function saveSettings() {
         wsUrl: $('#cfg-napcat-ws').value.trim(),
         httpUrl: $('#cfg-napcat-http').value.trim(),
         accessToken: $('#cfg-napcat-token').value.trim(),
+        inputStatusEnabled: $('#cfg-input-status').checked,
       },
       model: {
         baseUrl: $('#cfg-model-base-url').value.trim(),

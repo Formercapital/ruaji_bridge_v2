@@ -443,6 +443,7 @@ test('配置管理接口支持获取、校验、持久化与热更新', async ()
     assert.ok(res.body.config);
     assert.ok(res.body.metadata.presets.visionModels.length > 0);
     assert.equal(res.body.config.identity.ownerId, '10000001');
+    assert.equal(res.body.config.napcat.inputStatusEnabled, true, '私聊输入状态默认开启');
     assert.equal(res.body.config.identity.ownerTitle, '主人', '未配置时称呼回落默认「主人」');
 
     // 2. PUT /api/config 校验非法输入
@@ -468,6 +469,11 @@ test('配置管理接口支持获取、校验、持久化与热更新', async ()
           botName: '瑞姬测试版',
           ownerTitle: '饲主大人',
         },
+        napcat: {
+          wsUrl: res.body.config.napcat.wsUrl,
+          httpUrl: res.body.config.napcat.httpUrl,
+          inputStatusEnabled: false,
+        },
         meme: {
           autoCollect: true,
           autoAiTagging: true,
@@ -488,6 +494,10 @@ test('配置管理接口支持获取、校验、持久化与热更新', async ()
     // 4. 再次获取确认已生效
     const checkRes = await get('/api/config');
     assert.equal(checkRes.body.config.identity.botName, '瑞姬测试版');
+    assert.equal(checkRes.body.config.napcat.inputStatusEnabled, false);
+    assert.equal(container.config.napcat.inputStatusEnabled, false, '输入状态开关应热生效');
+    const savedConfig = JSON.parse(fs.readFileSync(container.config.paths.configFile, 'utf8'));
+    assert.equal(savedConfig.napcat.inputStatusEnabled, false, '重启后仍保留输入状态开关');
     assert.equal(checkRes.body.config.identity.ownerTitle, '饲主大人', '自定义称呼应持久化并在读取时回显');
     assert.equal(checkRes.body.config.meme.visionModel, 'gemini-2.5-flash');
     // 后置表情匹配字段：落盘回显 + 生效值回落

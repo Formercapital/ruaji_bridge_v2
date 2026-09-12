@@ -160,6 +160,7 @@ export class Lifecycle {
 
     // 顺序：先断消息流，再排空发送队列，最后落盘
     try { this.c.websocket.close(); } catch { /* ignore */ }
+    this.c.inputStatus?.stop();
     this.c.sessionStore.clearAllTimers();
     try { this.c.sender.stop(); } catch { /* ignore */ }
     try { await this.c.mem0Ingestor?.stop(); } catch { /* ignore */ }

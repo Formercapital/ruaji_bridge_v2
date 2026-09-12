@@ -37,6 +37,7 @@ export class InboundFlow {
     this.decisionFlow = deps.decisionFlow;
     this.contextFlow = deps.contextFlow;
     this.replyFlow = deps.replyFlow;
+    this.inputStatus = deps.inputStatus ?? null;
     this.commandFlow = deps.commandFlow;
     this.affection = deps.affectionStore;
     this.memeStore = deps.memeStore ?? null;
@@ -288,6 +289,8 @@ export class InboundFlow {
       correlationId: inbound.correlationId,
     });
 
+    // 门禁、去重、裁决与防抖均已通过；提示覆盖上下文、模型和分段投递。
+    const stopInputStatus = this.inputStatus?.start(inbound, { signal: controller.signal });
     try {
       const { blocks, intercepted, reply } = await this.contextFlow.collect(inbound, {
         triggerType: decision.triggerType,
@@ -326,6 +329,7 @@ export class InboundFlow {
         this.trace?.recordError(inbound.correlationId, classified.message);
       }
     } finally {
+      stopInputStatus?.();
       this.sessions.endExecution(executionKey, controller);
       // 排队期间积压的消息：本轮结束后再跑一次
       const buf = this.sessions.getBuffer(executionKey);

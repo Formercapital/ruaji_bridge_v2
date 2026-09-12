@@ -79,6 +79,7 @@ export function createConfigApi(deps) {
           hasAccessToken: Boolean(config.secrets?.napcatAccessToken || rawConfig.napcat?.accessToken),
           requestTimeoutMs: config.napcat?.requestTimeoutMs ?? 8000,
           sendTimeoutMs: config.napcat?.sendTimeoutMs ?? 30000,
+          inputStatusEnabled: config.napcat?.inputStatusEnabled !== false,
         },
         model: {
           provider: config.model?.provider ?? 'openai-compatible',
@@ -346,6 +347,7 @@ export function createConfigApi(deps) {
         }
         if (updates.napcat.requestTimeoutMs != null) nap.requestTimeoutMs = Number(updates.napcat.requestTimeoutMs);
         if (updates.napcat.sendTimeoutMs != null) nap.sendTimeoutMs = Number(updates.napcat.sendTimeoutMs);
+        if (updates.napcat.inputStatusEnabled != null) nap.inputStatusEnabled = Boolean(updates.napcat.inputStatusEnabled);
         diskConfig.napcat = nap;
       }
 
@@ -498,6 +500,9 @@ export function createConfigApi(deps) {
       // 4. 热更新运行时内存状态
       if (diskConfig.identity) Object.assign(config.identity, diskConfig.identity);
       if (diskConfig.wake) Object.assign(config.wake, diskConfig.wake);
+      if (diskConfig.napcat?.inputStatusEnabled != null) {
+        config.napcat.inputStatusEnabled = diskConfig.napcat.inputStatusEnabled;
+      }
       if (diskConfig.decision) {
         Object.assign(config.decision, diskConfig.decision);
         if (sessionStore && diskConfig.decision.localWindowSize) {

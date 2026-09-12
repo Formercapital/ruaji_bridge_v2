@@ -22,6 +22,7 @@ const DEFAULTS = {
     reconnect: { minBackoffMs: 1000, maxBackoffMs: 60000 },
     requestTimeoutMs: 8000,
     sendTimeoutMs: 30000,
+    inputStatusEnabled: true,
   },
   model: {
     provider: 'openai-compatible',

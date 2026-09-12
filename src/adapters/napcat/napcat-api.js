@@ -107,6 +107,20 @@ export class NapcatApi {
     return this._request('get_status');
   }
 
+  /** LLBot >= 7.12.3 与 NapCat 共用的私聊输入状态接口。0 是说话，1 是输入。 */
+  async setInputStatus(userId) {
+    const qq = Number(userId);
+    if (!Number.isSafeInteger(qq) || qq <= 0) throw new SendError('输入状态需要有效的 QQ 号');
+    const data = await this._request('set_input_status', {
+      method: 'POST',
+      body: { user_id: qq, event_type: 1 },
+      timeoutMs: 2000,
+    });
+    if (data?.status === 'ok' && Number(data.retcode ?? 0) === 0) return;
+    if (data?.status === 'async' && Number(data.retcode ?? 1) === 1) return;
+    throw new SendError(`NapCat set_input_status 失败: ${JSON.stringify(data).slice(0, 300)}`);
+  }
+
   async getMsg(messageId) {
     const data = await this._request('get_msg', { query: { message_id: messageId } });
     return data?.data ?? null;

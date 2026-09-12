@@ -12,6 +12,7 @@
 - 🌊 **自然流式切句与后处理管线**：
   - 智能切句：严格基于自然空行分段，杜绝数字小数、URL 与英文缩写被误切断。
   - 洋葱模型中间件（Middleware Pipeline）：好感度标签剥离、媒体提取、表情包解析、Markdown 安全清洗、拟人化打字延迟。
+  - 私聊开始处理后，每 0.5 秒刷新 QQ 原生「正在输入中」，覆盖上下文读取、模型处理与分段投递，完成、失败或打断时停止上报，提示由 QQ 自行清除。兼容 [LLBot 7.12.3+](https://llonebot.apifox.cn/api-449484306) 与 NapCat，参考 [input_state_by_nc](https://github.com/ctrlkk/astrbot_plugin_input_state_by_nc) 的刷新方式。默认开启，可在「客制化设置 → NapCat / LLBot 协议端与运行模式」关闭，或配置 `napcat.inputStatusEnabled: false`。群聊、影子模式和测试模式不触发，接口失败时本轮跳过。
 - 🖼️ **表情包图库与 AI 视觉打标**：
   - 自动收集群聊表情包并异步调用视觉模型（GPT-4o-mini / Gemini-Flash 等）分析画面文字梗并自动打标入库。
   - 支持 `&&meme:ID&&` 精准引用与 `[表情:标签]` 语义模糊检索。

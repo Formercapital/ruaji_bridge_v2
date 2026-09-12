@@ -23,6 +23,7 @@ import { NapcatWebSocketClient } from '../adapters/napcat/websocket-client.js';
 import { MediaIngestor } from '../adapters/napcat/media-ingestor.js';
 import { InboundNormalizer } from '../adapters/napcat/inbound-normalizer.js';
 import { Sender } from '../adapters/napcat/sender.js';
+import { InputStatus } from '../adapters/napcat/input-status.js';
 import { createModelAdapter, ModelRouter } from '../adapters/model/model-router.js';
 import { ModelSessionStore } from '../storage/model-session-store.js';
 import { OpenAiCompatibleAdapter } from '../adapters/model/openai-compatible.js';
@@ -137,6 +138,7 @@ export function createContainer(config, overrides = {}) {
     logger,
     fetchImpl,
   });
+  const inputStatus = new InputStatus({ napcatApi, config, logger });
   const normalizer = new InboundNormalizer({
     identity: config.identity,
     wake: config.wake,
@@ -323,6 +325,7 @@ export function createContainer(config, overrides = {}) {
     decisionFlow,
     contextFlow,
     replyFlow,
+    inputStatus,
     commandFlow,
     affectionStore,
     memeStore,
@@ -358,6 +361,7 @@ export function createContainer(config, overrides = {}) {
     // adapters
     napcatApi,
     mediaIngestor,
+    inputStatus,
     normalizer,
     websocket,
     sender,

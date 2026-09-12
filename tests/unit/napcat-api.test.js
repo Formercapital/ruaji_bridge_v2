@@ -102,3 +102,25 @@ test('sendMessage 真失败时照旧抛 SendError（warn 不替代抛异常）',
   );
   assert.equal(failures(logger).length, 1, '抛异常之外仍然留一条带 retcode 的记录');
 });
+
+test('输入状态兼容 LLBot 的空 data 响应与 NapCat 响应，按共同协议发送输入事件', async () => {
+  for (const data of [null, { result: 0, errMsg: '' }]) {
+    const { api, fetchImpl, logger } = build({
+      'POST /set_input_status': () => ({ body: { status: 'ok', retcode: 0, data } }),
+    });
+    await api.setInputStatus('10000001');
+    assert.deepEqual(fetchImpl.calls[0].body, { user_id: 10000001, event_type: 1 });
+    assert.equal(fetchImpl.calls[0].init.headers.Authorization, 'Bearer tok');
+    assert.deepEqual(failures(logger), []);
+  }
+});
+
+test('输入状态的业务失败和 HTTP 失败必须反馈给刷新器，避免无效轮询', async () => {
+  for (const response of [
+    { body: { status: 'failed', retcode: 1200, message: '不支持的动作' } },
+    { status: 404, body: { message: 'not found' } },
+  ]) {
+    const { api } = build({ 'POST /set_input_status': () => response });
+    await assert.rejects(() => api.setInputStatus('10000001'), SendError);
+  }
+});
