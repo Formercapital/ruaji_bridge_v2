@@ -365,13 +365,86 @@ test('带图片时 userMessage 变成多模态 parts，优先用 URL', () => {
   const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
   assert.ok(Array.isArray(parts));
   assert.equal(parts[0].type, 'text');
-  assert.equal(parts[1].image_url.url, 'https://x/y.png');
+  // 图1 前紧邻一行归属说明牌（做法一：归属文本必须紧贴图片）
+  assert.equal(parts[1].type, 'text');
+  assert.ok(parts[1].text.startsWith('[图1:'));
+  assert.equal(parts[2].image_url.url, 'https://x/y.png');
 });
 
 test('没有 URL 时退回本地 file URI', () => {
   const inbound = makeInbound({ media: [{ kind: 'image', localPath: 'F:\\received_images\\a.png' }] });
   const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
-  assert.equal(parts[1].image_url.url, 'file:///F:/received_images/a.png');
+  assert.equal(parts[1].type, 'text');
+  assert.equal(parts[2].image_url.url, 'file:///F:/received_images/a.png');
+});
+
+// ===== 做法一：图片归属说明牌 =====
+
+test('引用机器人自己的图：说明牌明示是你自己此前发送的', () => {
+  const inbound = makeInbound({
+    media: [{ kind: 'image', origin: 'quote', originAuthor: '瑞姬', originIsBot: true, localPath: 'F:/a.png' }],
+  });
+  const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+  const label = parts[1].text;
+  assert.ok(label.includes('原作者: 瑞姬'), '要标出原作者');
+  assert.ok(label.includes('即你自己'), '要明示是你自己发的');
+  assert.ok(label.includes('并非本条消息发送者发来的'), '要排除"发送者发的"误读');
+  assert.equal(parts[2].type, 'image_url');
+});
+
+test('引用他人的图：说明牌标出原作者，且声明不是发送者附带的', () => {
+  const inbound = makeInbound({
+    userId: '2260757842',
+    sender: { nickname: '御娘狼三千', card: '', displayName: '御娘狼三千' },
+    media: [{ kind: 'image', origin: 'quote', originAuthor: '羽莺1947III', originIsBot: false, localPath: 'F:/a.png' }],
+  });
+  const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+  const label = parts[1].text;
+  assert.ok(label.includes('原作者: 羽莺1947III'));
+  assert.ok(label.includes('被引用转发的'));
+  assert.ok(label.includes('并非本条消息发送者附带的'));
+});
+
+test('自带图与引用图混排：说明牌交错排列、编号连续', () => {
+  const inbound = makeInbound({
+    media: [
+      { kind: 'image', origin: 'message', originAuthor: '羽莺1947III', url: 'https://x/own.png' },
+      { kind: 'image', origin: 'quote', originAuthor: '瑞姬', originIsBot: true, url: 'https://x/quoted.png' },
+    ],
+  });
+  const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+  assert.deepEqual(
+    parts.map((p) => p.type),
+    ['text', 'text', 'image_url', 'text', 'image_url'],
+    '布局必须是：正文 → 图1说明 → 图1 → 图2说明 → 图2',
+  );
+  assert.ok(parts[1].text.startsWith('[图1:'));
+  assert.ok(parts[1].text.includes('羽莺1947III 本条消息附带的图片'));
+  assert.ok(parts[3].text.startsWith('[图2:'));
+  assert.ok(parts[3].text.includes('即你自己'));
+});
+
+test('没有归属信息的图退回通用说明牌，不丢图也不空编号', () => {
+  const inbound = makeInbound({
+    media: [
+      { kind: 'image', url: 'https://x/1.png' },
+      // 既无 URL 也无本地路径：图挂不进 parts，说明牌跟着跳过，编号不断档
+      { kind: 'image' },
+      { kind: 'image', url: 'https://x/2.png' },
+    ],
+  });
+  const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+  assert.deepEqual(
+    parts.map((p) => p.type),
+    ['text', 'text', 'image_url', 'text', 'image_url'],
+  );
+  assert.equal(parts[1].text, '[图1: 本条消息附带的图片]');
+  assert.equal(parts[3].text, '[图2: 本条消息附带的图片]');
+});
+
+test('纯文本消息（无图）不受说明牌影响', () => {
+  const out = renderUserMessage({ inbound: makeInbound(), contextBlocks: [], identity: IDENTITY });
+  assert.equal(typeof out, 'string');
 });
 
 test('本地媒体清单把绝对路径告诉模型（附录 2）', () => {

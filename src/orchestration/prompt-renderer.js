@@ -213,6 +213,12 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
  *
  * 旧 Bridge 优先用 URL 省 token（bridge.js:898-908）。v2 保留这个偏好，
  * 但同时把本地绝对路径挂在 metadata 里（附录 2），让模型侧工具能直接读文件。
+ *
+ * 每张图片紧前面插一行归属说明牌（imageOriginLabel）。多模态请求里 image part
+ * 不带任何元数据，模型对 user turn 里图片的默认认知就是"发消息的人发来的"；
+ * 引用消息拉回来的图如果裸 append，会被误读成发送者发的（2026-09-10 案例：
+ * 群友引用瑞姬发的表情包，Hermes 以为对方在给她发图）。归属必须写成文本、
+ * 且紧贴图片本身——远距离指代（"下方第一张图是…"）在多图场景不可靠。
  */
 export function renderUserMessage({ inbound, contextBlocks, identity }) {
   const text = renderUserContent({ inbound, contextBlocks, identity });
@@ -220,14 +226,38 @@ export function renderUserMessage({ inbound, contextBlocks, identity }) {
   if (images.length === 0) return text;
 
   const parts = [{ type: 'text', text }];
+  let attached = 0;
   for (const image of images) {
-    if (image.url) {
-      parts.push({ type: 'image_url', image_url: { url: image.url } });
-    } else if (image.localPath) {
-      parts.push({ type: 'image_url', image_url: { url: `file:///${image.localPath.replace(/\\/g, '/')}` } });
-    }
+    const url = image.url
+      ? image.url
+      : image.localPath
+        ? `file:///${image.localPath.replace(/\\/g, '/')}`
+        : null;
+    // 既无 URL 也无本地路径的图挂不进 parts，说明牌跟着一起跳过，保证编号与实际图片一一对应
+    if (!url) continue;
+    parts.push({ type: 'text', text: imageOriginLabel(image, attached) });
+    parts.push({ type: 'image_url', image_url: { url } });
+    attached += 1;
   }
   return parts;
+}
+
+/**
+ * 图片归属说明牌。origin/originAuthor/originIsBot 由 InboundNormalizer 挂到
+ * media item 上（本条自带 vs 引用消息转发），批次合并（mergeBatch）原样保留。
+ */
+function imageOriginLabel(image, index) {
+  const no = index + 1;
+  if (image.origin === 'quote') {
+    if (image.originIsBot) {
+      return `[图${no}: 引用消息里的图片，原作者: ${image.originAuthor || '你'}——即你自己，是你此前发送的图片，并非本条消息发送者发来的]`;
+    }
+    return `[图${no}: 引用消息里的图片，原作者: ${image.originAuthor || '未知'}，是被引用转发的，并非本条消息发送者附带的]`;
+  }
+  if (image.originAuthor) {
+    return `[图${no}: ${image.originAuthor} 本条消息附带的图片]`;
+  }
+  return `[图${no}: 本条消息附带的图片]`;
 }
 
 /**

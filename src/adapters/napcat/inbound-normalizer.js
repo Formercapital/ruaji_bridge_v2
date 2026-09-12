@@ -28,6 +28,7 @@ import {
   annotateCqCodes,
   segmentsToText,
   renderAtMention,
+  sanitizeMentionName,
   AT_CQ_SOURCE,
 } from './cq.js';
 
@@ -120,6 +121,14 @@ export class InboundNormalizer {
 
     // 媒体落盘（附录 2）：图片与文件都拿到本地绝对路径
     const media = await this._ingestMedia(segments, { groupId, signal: ctx.signal });
+
+    // 归属标注：本条消息自带的媒体，作者就是发送者。渲染层据此在每张图
+    // 紧前面插一行说明牌（prompt-renderer.renderUserMessage），模型才能
+    // 区分"发送者的图"和"引用消息里转发的图"。
+    for (const item of media) {
+      item.origin = 'message';
+      item.originAuthor = sender.displayName;
+    }
 
     // 引用消息：拉原消息，连带其中的图片与文件
     const quote = await this._resolveQuote(segments, rawMessage, { groupId, signal: ctx.signal });
@@ -250,8 +259,12 @@ export class InboundNormalizer {
       return inlineText ? { messageId: replyId, summary: `[引用消息: ${inlineText}]`, media: [] } : null;
     }
 
+    // 引用作者名是群成员可控文本（群名片），进 Prompt 前过 at 昵称同款净化
     const quotedNick =
-      original.sender?.card || original.sender?.nickname || original.sender?.user_id || '未知';
+      sanitizeMentionName(original.sender?.card || original.sender?.nickname || original.sender?.user_id) || '未知';
+    // 引用的是不是机器人自己发的：是的话归属标注要能说出"这是你自己之前发的图"，
+    // 否则模型会把自己发出的表情包误读成对方发来的嘲讽（2026-09-10 杂鱼图案例）
+    const isBot = String(original.sender?.user_id ?? '') === String(this.identity.robotId);
 
     const quotedSegments = Array.isArray(original.message)
       ? original.message.map((s) => ({ type: String(s?.type ?? '').toLowerCase(), data: s?.data ?? {} }))
@@ -262,6 +275,11 @@ export class InboundNormalizer {
       : annotateCqCodes(String(original.message ?? original.raw_message ?? inlineText ?? ''));
 
     const media = await this._ingestMedia(quotedSegments, { groupId, signal });
+    for (const item of media) {
+      item.origin = 'quote';
+      item.originAuthor = isBot ? (this.identity.botName || quotedNick) : quotedNick;
+      item.originIsBot = isBot;
+    }
     const fileSummaries = media
       .filter((m) => m.kind === 'file' && m.summary)
       .map((m) => m.summary)
