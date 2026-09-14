@@ -72,6 +72,13 @@ class InboundMessage:
     #: 被回复的消息 id（QQ 的引用回复），没有就是空串
     reply_to: str = ""
     role: str = "member"
+    #: 触发类型（桥接侧裁决）：at / keyword / ai_decision。
+    #:
+    #: 宿主与插件靠它区分"被动回复"与"主动插话"——桥接的主动插话不构成
+    #: 与群友的互动，不注入也不结算好感度。以前只在桥接侧判断，Favour
+    #: Ultra 把注入搬到宿主后，这个字段不过来豁免就丢了（enrich 的 body
+    #: 一直带着它，只是 from_payload 不认）。
+    trigger_type: str = ""
     timestamp: float = field(default_factory=time.time)
     #: 被 @ 的用户 QQ 号（不含 bot 自身，去重保序）。
     #:
@@ -134,6 +141,7 @@ class InboundMessage:
             at_bot=sbool("isAtBot", "is_at_bot", "atBot", "at_bot"),
             reply_to=sid("replyTo", "reply_to"),
             role=str(payload.get("role") or "member"),
+            trigger_type=sid("triggerType", "trigger_type"),
             timestamp=float(payload.get("timestamp") or time.time()),
             at_targets=_extract_at_targets(payload),
             raw=dict(payload.get("raw") or payload.get("rawMessage") or payload.get("raw_message") or {} if isinstance(payload.get("raw") or payload.get("rawMessage") or payload.get("raw_message"), dict) else {}),

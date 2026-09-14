@@ -381,6 +381,11 @@ class HostServer:
             return _json({"ok": True, "text": ""})
 
         inbound_data = body.get("inbound") if isinstance(body.get("inbound"), dict) else body
+        # 顶层 triggerType 并进消息体：from_payload 只认消息形状的字段，
+        # 并进来 build_event 才能把触发类型带给 decorating 钩子
+        # （llm.response 路径不需要这段——事件订阅把 payload 摊平到顶层）。
+        if body.get("triggerType"):
+            inbound_data = {**inbound_data, "triggerType": body["triggerType"]}
         message = InboundMessage.from_payload(inbound_data)
         self_id = str((self.unified.config.get("identity") or {}).get("robot_id") or "")
         event = build_event(message, self_id=self_id)

@@ -195,7 +195,7 @@ export class ReplyFlow {
     // 收尾轮之前并同步等待——上游数据流是「响应钩子解析暂存 → 文本修饰钩子
     // 清洗写库」，发布晚了暂存永远无人消费，评分永远不落库。一次回复只派发
     // 一次；有界超时，失败降级：跳过本轮结算并记录，不影响发送。
-    await this._settleResponse({ inbound, response, state, memeMatch, signal, startedAt });
+    await this._settleResponse({ inbound, response, state, memeMatch, signal, startedAt, triggerType });
 
     // 收尾轮：对完整原文跑一次管线；result.decorate 让插件弹出暂存并写库
     await this._finalPass({ inbound, response, triggerType, state, signal });
@@ -224,7 +224,7 @@ export class ReplyFlow {
    * 文本发送。publish 本身是 allSettled 的，不会 reject；这里再套一层
    * 有界竞速，防止单个订阅者吊住整轮回复。
    */
-  async _settleResponse({ inbound, response, state, memeMatch, signal, startedAt }) {
+  async _settleResponse({ inbound, response, state, memeMatch, signal, startedAt, triggerType }) {
     if (signal?.aborted) return;
 
     // createEvent 只保留 correlationId / sessionId / payload / timestamp
@@ -240,6 +240,8 @@ export class ReplyFlow {
         userName: inbound.sender.displayName,
         messageType: inbound.messageType,
         isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+        /** 触发类型随事件透传：宿主侧 Favour 据此豁免主动插话轮的标签解析 */
+        triggerType,
         /** 用户这一轮说了什么。`text` 已经被占用为模型回复，别再复用它 */
         userText: inbound.content,
         responseId: response.responseId,

@@ -2014,6 +2014,11 @@ class FavourManagerTool(Star):
 
     @filter.on_llm_request()
     async def inject_favour_prompt(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        # 桥接主动插话轮（trigger_type=ai_decision）：群友并未与 bot 互动，
+        # 不注入好感度规则与数据——与旧好感链路的主动接话豁免对齐（vendor patch 11）
+        if event.get_extra("_bridge_trigger_type") == "ai_decision":
+            logger.debug("[Prompt注入] 桥接主动插话轮，跳过好感度注入。")
+            return
         try:
             session_id = self._get_session_id(event)
             user_id = str(event.get_sender_id())
@@ -2254,6 +2259,12 @@ class FavourManagerTool(Star):
         if event.get_extra("_is_active_chat_synthetic"):
             logger.debug("[搭话管线] 搭话合成事件，跳过好感度标签解析。")
             return
+
+        # 桥接主动插话轮：无互动对象，不解析、不暂存好感度标签（vendor patch 11）
+        if event.get_extra("_bridge_trigger_type") == "ai_decision":
+            logger.debug("[Prompt注入] 桥接主动插话轮，跳过好感度标签解析。")
+            return
+
         
         msg_id = str(event.message_obj.message_id)
         text = resp.completion_text
@@ -2378,6 +2389,12 @@ class FavourManagerTool(Star):
         res.chain = new_chain
 
         if not data: return
+
+        # 桥接主动插话轮：无互动对象，不结算写库（vendor patch 11）。
+        # 上面的标签清洗照常执行——模型从历史里模仿出来的标签不能漏到聊天里。
+        if event.get_extra("_bridge_trigger_type") == "ai_decision":
+            logger.debug("[Prompt注入] 桥接主动插话轮，跳过好感度数据更新。")
+            return
 
         try:
             sender_id = str(event.get_sender_id())

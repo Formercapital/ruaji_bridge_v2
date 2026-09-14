@@ -122,6 +122,11 @@ def build_event(message: InboundMessage, self_id: str = "", send_hook=None) -> A
     # at_bot 就是唤醒。GCP 的多数分支读 is_at_or_wake_command 而不是自己解析消息链。
     event.is_at_or_wake_command = message.at_bot
     event.is_wake = message.at_bot
+    # 触发类型随事件透传：插件（Favour Ultra）靠它豁免桥接主动插话轮的
+    # 好感度注入与结算。enrich / llm.response / decorate 三条路径都从
+    # build_event 造事件，塞在这里一处生效。
+    if message.trigger_type:
+        event.set_extra("_bridge_trigger_type", message.trigger_type)
     return event
 
 

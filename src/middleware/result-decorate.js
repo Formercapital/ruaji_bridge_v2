@@ -48,6 +48,8 @@ export function createResultDecorateMiddleware(deps) {
           correlationId: context.correlationId,
           responseId: context.responseId,
           isFinalPass: context.isFinalPass,
+          // 触发类型透传：宿主侧 Favour 据此豁免主动插话轮的结算写库
+          triggerType: context.triggerType,
           inbound: context.inbound
             ? {
                 messageId: context.inbound.messageId,

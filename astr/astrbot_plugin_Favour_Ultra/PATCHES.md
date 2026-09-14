@@ -64,8 +64,21 @@ is minimal, additive, and replayable against a future upstream release.
 
 10. **Owner record rebuild** (`storage.py` `ensure_owner_records`, called from
     `main.py` `_init_storage` and after clears): (re)creates the owner row at
-    max favour with the default exclusive intimate relation and fixed title,
-    repairing external corruption and post-clear state.
+     max favour with the default exclusive intimate relation and fixed title,
+     repairing external corruption and post-clear state.
+
+11. **Bridge proactive-turn exemption** (`main.py`, `inject_favour_prompt` /
+    `handle_llm_response` / `update_data`): bridge-synthesized proactive
+    interjections (trigger type `ai_decision`) get no favour injection, no
+    tag parsing, and no settlement write — mirroring the legacy affection
+    chain, where proactive turns never evaluated favour (the bridge prompt
+    explicitly says "此类无需评价好感度"; injecting the MandatoryFooter on
+    those turns contradicted it). The host passes the bridge trigger type
+    through the event extra `_bridge_trigger_type`
+    (`hermes_layer/contracts.py` `from_payload` + `context_builder.build_event`;
+    the bridge sends `triggerType` on enrich, llm.response and decorate
+    bodies). Tag stripping in `update_data` still runs so tags echoed from
+    history never leak to chat.
 
 ## Not needed (verified against the unified host)
 
