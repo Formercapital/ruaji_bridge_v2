@@ -172,7 +172,13 @@ class GatewayClient:
         if not texts:
             return []
 
-        payload = {"model": model or cfg.model, "input": texts}
+        # dimensions 必须显式传：FAISS 索引维度建库时定死，而同一模型在不同中转
+        # 的默认输出维度可能不同。不传就撞索引（faiss assert d == self.d）。
+        payload: dict[str, Any] = {
+            "model": model or cfg.model,
+            "input": texts,
+            "dimensions": self.embedding_dim,
+        }
         data = await self._post(cfg, "embeddings", "/embeddings", payload)
 
         items = data.get("data") or []
