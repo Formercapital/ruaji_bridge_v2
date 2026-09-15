@@ -338,4 +338,45 @@ export class OpenAiCompatibleAdapter {
       return { ok: false, detail: `无法连接 ${this.baseUrl}: ${why}` };
     }
   }
+
+  /**
+   * 把补充文本并入该会话正在生成的轮次（Hermes 原生 redirect）。
+   * 服务端会取消在途模型请求、保留已生成前缀、把 correction 作为 user
+   * 消息追加后继续；若该轮正在执行工具则降级为 steer（等工具跑完再注入）。
+   *
+   * @param {string} sessionKey 与 generate() 同一的会话键
+   * @param {string} text 补充文本
+   * @returns {Promise<{ ok: boolean, code?: string, detail?: string }>}
+   *   ok=false 且 code='no_active_run'/'redirect_not_accepted' 表示没有在途轮可并入，
+   *   调用方应回退到下一轮排队或硬打断。
+   */
+  async redirect(sessionKey, text, { timeoutMs = 8000 } = {}) {
+    const key = OpenAiCompatibleAdapter.sanitizeSessionKey(sessionKey);
+    const cleaned = String(text ?? '').trim();
+    if (!key || !cleaned) return { ok: false, code: 'invalid_input', detail: '空的会话键或文本' };
+
+    const url = `${this.baseUrl.replace(/\/v1$/, '')}/v1/chat/redirect`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    if (this.sessionHeader) headers[this.sessionHeader] = this.getSessionId(sessionKey);
+
+    try {
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ text: cleaned }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.accepted) return { ok: true };
+      return {
+        ok: false,
+        code: data.error?.code ?? `http_${res.status}`,
+        detail: data.error?.message ?? `HTTP ${res.status}`,
+      };
+    } catch (err) {
+      const why = err.name === 'TimeoutError' || err.name === 'AbortError' ? '请求超时' : err.message;
+      return { ok: false, code: 'network_error', detail: why };
+    }
+  }
 }

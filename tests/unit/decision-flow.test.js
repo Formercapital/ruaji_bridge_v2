@@ -152,23 +152,23 @@ test('限流不影响名单外用户', async () => {
 
 // ===== 并发仲裁与打断特权（附录 1）=====
 
-test('空闲时直接开始', () => {
+test('空闲时直接开始', async () => {
   const flow = makeFlow();
-  assert.deepEqual(flow.arbitrateConcurrency(makeInbound()), { action: 'start' });
+  assert.deepEqual(await flow.arbitrateConcurrency(makeInbound()), { action: 'start' });
 });
 
-test('在途生成时，普通群友只排队不打断', () => {
+test('在途生成时，普通群友只排队不打断', async () => {
   const sessions = new SessionStore();
   const flow = makeFlow({ sessionStore: sessions });
   const controller = new AbortController();
   sessions.beginExecution('group_793019665', { controller, source: 'direct' });
 
-  const result = flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }));
+  const result = await flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }));
   assert.equal(result.action, 'queue');
   assert.equal(controller.signal.aborted, false, '普通群友不得打断在途生成');
 });
 
-test('ruaji 的消息拥有即时打断特权', () => {
+test('ruaji 的消息拥有即时打断特权', async () => {
   const sessions = new SessionStore();
   const flow = makeFlow({ sessionStore: sessions });
   const controller = new AbortController();
@@ -179,20 +179,20 @@ test('ruaji 的消息拥有即时打断特权', () => {
     executionKey: 'group_793019665',
     flags: { isOwner: true, isAtBot: true },
   });
-  const result = flow.arbitrateConcurrency(owner);
+  const result = await flow.arbitrateConcurrency(owner);
 
   assert.equal(result.action, 'preempt');
   assert.equal(controller.signal.aborted, true, '主人消息必须立即打断在途生成');
   assert.ok(controller.signal.reason?.preempted);
 });
 
-test('在途生成时，无 @ 的 auto 插话直接丢弃而不是排队（P2）', () => {
+test('在途生成时，无 @ 的 auto 插话直接丢弃而不是排队（P2）', async () => {
   const sessions = new SessionStore();
   const flow = makeFlow({ sessionStore: sessions });
   const controller = new AbortController();
   sessions.beginExecution('group_793019665', { controller, source: 'direct' });
 
-  const result = flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }), {
+  const result = await flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }), {
     route: ROUTES.AUTO,
   });
 
@@ -200,14 +200,14 @@ test('在途生成时，无 @ 的 auto 插话直接丢弃而不是排队（P2）
   assert.equal(controller.signal.aborted, false, '丢弃不能打断在途生成');
 });
 
-test('在途生成时，被真 @ 的 auto 消息仍然排队（真 @ 优先于裁决者）', () => {
+test('在途生成时，被真 @ 的 auto 消息仍然排队（真 @ 优先于裁决者）', async () => {
   const sessions = new SessionStore();
   const flow = makeFlow({ sessionStore: sessions });
   const controller = new AbortController();
   sessions.beginExecution('group_793019665', { controller, source: 'direct' });
 
   const atMe = makeInbound({ executionKey: 'group_793019665', flags: { isAtBot: true } });
-  assert.equal(flow.arbitrateConcurrency(atMe, { route: ROUTES.AUTO }).action, 'queue');
+  assert.equal((await flow.arbitrateConcurrency(atMe, { route: ROUTES.AUTO })).action, 'queue');
 
   // 主人的 auto 消息照旧走打断特权，不被丢弃分支截走
   const owner = makeInbound({
@@ -215,15 +215,119 @@ test('在途生成时，被真 @ 的 auto 消息仍然排队（真 @ 优先于�
     executionKey: 'group_793019665',
     flags: { isOwner: true },
   });
-  assert.equal(flow.arbitrateConcurrency(owner, { route: ROUTES.AUTO }).action, 'preempt');
+  assert.equal((await flow.arbitrateConcurrency(owner, { route: ROUTES.AUTO })).action, 'preempt');
 });
 
-test('不传 decision 时仲裁行为与旧签名一致（永不 drop）', () => {
+test('不传 decision 时仲裁行为与旧签名一致（永不 drop）', async () => {
   const sessions = new SessionStore();
   const flow = makeFlow({ sessionStore: sessions });
   sessions.beginExecution('group_793019665', { controller: new AbortController(), source: 'direct' });
 
-  assert.equal(flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' })).action, 'queue');
+  assert.equal((await flow.arbitrateConcurrency(makeInbound({ executionKey: 'group_793019665' }))).action, 'queue');
+});
+
+// ===== 主人补充 redirect（Hermes 原生丝滑打断）=====
+
+function makeRedirectFlow(redirectResult, { ownerRedirect = true } = {}) {
+  const flow = makeFlow();
+  flow.modelRouter = {
+    redirect: async () => redirectResult,
+  };
+  flow.config = { ...flow.config, decision: { ...flow.config.decision, ownerRedirect } };
+  return flow;
+}
+
+test('主人补充 redirect 成功：不打断在途轮，返回 awaiting', async () => {
+  const sessions = new SessionStore();
+  const flow = makeRedirectFlow({ ok: true }, {});
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '等等，改成先回我这条',
+    flags: { isOwner: true },
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'awaiting');
+  assert.equal(result.redirected, true);
+  assert.equal(controller.signal.aborted, false, 'redirect 成功绝不能打断在途生成');
+});
+
+test('redirect 被拒（409 无在途轮）：回退硬打断', async () => {
+  const sessions = new SessionStore();
+  const flow = makeRedirectFlow({ ok: false, code: 'no_active_run', detail: 'no live run' });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '补充',
+    flags: { isOwner: true },
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'preempt', 'redirect 失败必须回退到打断特权');
+  assert.equal(controller.signal.aborted, true);
+});
+
+test('ownerRedirect=false：完全不试 redirect，直接打断（旧行为）', async () => {
+  const sessions = new SessionStore();
+  const flow = makeRedirectFlow({ ok: true }, { ownerRedirect: false });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '补充',
+    flags: { isOwner: true },
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'preempt');
+  assert.equal(controller.signal.aborted, true);
+});
+
+test('redirect 网络失败也回退硬打断，不能吞掉主人的消息', async () => {
+  const sessions = new SessionStore();
+  const flow = makeRedirectFlow({ ok: false, code: 'network_error', detail: 'timeout' });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '补充',
+    flags: { isOwner: true },
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'preempt');
+  assert.equal(controller.signal.aborted, true);
 });
 
 test('Golden fixture 的裁决结果符合预期', async () => {

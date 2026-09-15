@@ -44,6 +44,14 @@ const DEFAULTS = {
     debounceMs: 800,
     localWindowSize: 15,
     localWindowInject: 6,
+    /**
+     * 主人在途生成时的新消息处理：true = 优先走 Hermes 原生 redirect
+     * （不打断在途轮，把补充作为修正并入当前回复继续生成，跑不动时回退硬打断）；
+     * false = 旧行为（附录 1 的立即硬打断）。
+     */
+    ownerRedirect: true,
+    /** redirect 成功后给主人的回执；与 Hermes busy_ack 同款带冷却，防刷屏 */
+    redirectAck: { enabled: true, message: '↪ 收到补充，已并入当前回复继续生成~', cooldownMs: 30000 },
   },
   context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 2500 },
   reply: {

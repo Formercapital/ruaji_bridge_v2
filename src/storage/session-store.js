@@ -116,11 +116,13 @@ export class SessionStore {
     return Boolean(active && !active.controller.signal.aborted);
   }
 
-  beginExecution(executionKey, { controller, source, correlationId }) {
+  beginExecution(executionKey, { controller, source, correlationId, sessionKey }) {
     this.activeExecutions.set(executionKey, {
       controller,
       source: source ?? 'direct',
       correlationId: correlationId ?? null,
+      /** 该在途轮的模型会话键（redirect 目标），与 modelRequest.sessionKey 同源 */
+      sessionKey: sessionKey ?? null,
       startedAt: this.now(),
     });
   }

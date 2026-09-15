@@ -49,6 +49,8 @@ export class DecisionFlow {
     this.config = opts.config;
     this.log = opts.logger?.child({ component: 'decision-flow' }) ?? console;
     this.rateLimitUsers = new Set((opts.config.identity.rateLimitUsers ?? []).map(String));
+    /** @see arbitrateConcurrency 的 redirect 分支 */
+    this.modelRouter = opts.modelRouter ?? null;
   }
 
   /**
@@ -178,7 +180,12 @@ export class DecisionFlow {
    * 并发控制与打断特权（附录 1）。
    *
    * 群互斥锁按 executionKey（= 会话维度）。在途生成期间：
-   *   - ruaji 的新消息拥有最高优先级：立即 abort 在途生成并插话
+   *   - 主人 的新消息拥有最高优先级。默认先尝试 Hermes 原生 redirect——
+   *     不打断在途轮，把新消息作为"补充修正"并入当前生成（模型请求被取消
+   *     重试，已生成前缀保留），成功返回 { action: 'awaiting' }；跑不动
+   *     （无在途轮/正在收尾/网络失败/未启用）则回退旧的立即硬打断。
+   *     redirect 语义与 Hermes 原生 gateway 的 busy_input_mode=interrupt +
+   *     active-turn redirect 完全一致（"↪ Redirected current run"）。
    *   - 主动插话（auto）且没有真 @：直接丢弃，不排队（P2，与 handleProactive 的 busy 行为一致）
    *   - 其余群友的新消息只入缓冲队列排队，不打断
    *
@@ -188,13 +195,33 @@ export class DecisionFlow {
    *
    * @param {object} inbound
    * @param {{ route?: string }|null} [decision] 本条消息的裁决结果。不传等于旧行为（永不 drop）。
-   * @returns {{ action: 'start'|'preempt'|'queue'|'drop' }}
+   * @returns {Promise<{ action: 'start'|'preempt'|'queue'|'drop'|'awaiting', redirected?: boolean }>}
    */
-  arbitrateConcurrency(inbound, decision = null) {
+  async arbitrateConcurrency(inbound, decision = null) {
     const key = inbound.executionKey;
     if (!this.sessions.isBusy(key)) return { action: 'start' };
 
     if (inbound.flags.isOwner) {
+      if (this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
+        const active = this.sessions.getActive(key);
+        const result = await this.modelRouter.redirect(
+          active?.sessionKey ?? key,
+          this._redirectTextOf(inbound),
+        );
+        if (result.ok) {
+          this.log.info('主人补充已并入在途生成（redirect），不打断当前轮', {
+            correlationId: inbound.correlationId,
+            executionKey: key,
+          });
+          return { action: 'awaiting', redirected: true };
+        }
+        this.log.info('redirect 未被接受，回退硬打断', {
+          correlationId: inbound.correlationId,
+          executionKey: key,
+          code: result.code ?? null,
+          detail: result.detail ?? null,
+        });
+      }
       const preempted = this.sessions.preempt(
         key,
         new PreemptedError('interrupted by newer owner message', {
@@ -226,5 +253,14 @@ export class DecisionFlow {
       userId: inbound.userId,
     });
     return { action: 'queue' };
+  }
+
+  /**
+   * redirect 用的人话文本：带 OneBot at 段的原文对模型没有意义，
+   * 取 text（已去掉 CQ 码）；没有就退 content。
+   */
+  _redirectTextOf(inbound) {
+    const t = String(inbound.text ?? '').trim() || String(inbound.content ?? '').trim();
+    return t || null;
   }
 }

@@ -290,6 +290,7 @@ export function createContainer(config, overrides = {}) {
     capabilityBus,
     sessionStore,
     normalizer,
+    modelRouter,
     config,
     logger,
   });

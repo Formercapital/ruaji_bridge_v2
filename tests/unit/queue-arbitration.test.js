@@ -40,7 +40,13 @@ function createTestInboundFlow(route) {
     },
     wake: { mode: 'both', namePattern: '(^|[\\s，,。.!！?？~、；;:：])瑞姬' },
     // 防抖拉长：测试窗口内 timer 不会真的触发生成
-    decision: { debounceMs: 60000, rateLimit: { maxReplies: 5, windowMs: 300000 }, localWindowInject: 15 },
+    decision: {
+      debounceMs: 60000,
+      rateLimit: { maxReplies: 5, windowMs: 300000 },
+      localWindowInject: 15,
+      ownerRedirect: true,
+      redirectAck: { enabled: true, message: '↪ 收到补充，已并入当前回复继续生成~', cooldownMs: 30000 },
+    },
     reply: { sendEnabled: false, sideEffectsEnabled: true },
     context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 100 },
   };
@@ -58,9 +64,7 @@ function createTestInboundFlow(route) {
   const decisionFlow = {
     decide: async () => ({ route, triggerType: 'at', reason: 'stub', providerId: null }),
     arbitrateConcurrency: (inbound, decision) => realDecisionFlow.arbitrateConcurrency(inbound, decision),
-  };
-
-  const commandFlow = new CommandFlow({ sessionStore, config, logger });
+  };  const commandFlow = new CommandFlow({ sessionStore, config, logger });
   const affectionStore = new AffectionStore({ ownerId: config.identity.ownerId, persistEnabled: false, logger });
 
   /** 计数桩：丢弃必须与 route=ignore 同样落进 messages.ignored 桶 */
@@ -87,7 +91,7 @@ function createTestInboundFlow(route) {
     logger,
   });
 
-  return { inboundFlow, sessionStore, config, health };
+  return { inboundFlow, sessionStore, config, health, realDecisionFlow };
 }
 
 function groupRawEvent({ messageId, userId, nickname, text }) {
@@ -171,4 +175,43 @@ test('busy + 主人消息：preempt 照旧打断在途生成', async () => {
   assert.equal(controller.signal.aborted, true, '主人消息必须打断在途生成');
   const buf = sessionStore.getBuffer(EXECUTION_KEY);
   assert.equal(buf.pending.length, 1, '打断后主人消息入缓冲等下一轮');
+});
+
+test('busy + 主人消息 + redirect 成功：不打断、不排队、回执一次', async () => {
+  const { inboundFlow, sessionStore, realDecisionFlow } = createTestInboundFlow('direct');
+  // 给真实 DecisionFlow 注入 redirect 桩（容器里是 modelRouter，同构）
+  realDecisionFlow.modelRouter = { redirect: async () => ({ ok: true }) };
+
+  const controller = new AbortController();
+  sessionStore.beginExecution(EXECUTION_KEY, {
+    controller,
+    source: 'direct',
+    correlationId: 'busy-redirect',
+    sessionKey: EXECUTION_KEY,
+  });
+
+  const acks = [];
+  inboundFlow.commandFlow._reply = (inbound, text, command) => {
+    acks.push(text);
+    return { handled: true, command };
+  };
+
+  await inboundFlow.handleEvent(
+    groupRawEvent({ messageId: 90010, userId: 10000001, nickname: 'ruaji', text: '补充：改成先回我这条' }),
+  );
+
+  assert.equal(controller.signal.aborted, false, 'redirect 成功绝不能打断在途生成');
+  const buf = sessionStore.getBuffer(EXECUTION_KEY);
+  assert.equal(buf.pending.length, 0, 'redirect 已并入在途轮，消息不能再排队等下一轮');
+  assert.equal(buf.timer, null, '不应调度新生成');
+  assert.equal(acks.length, 1, '回执只发一条');
+  assert.ok(acks[0].includes('并入'), '回执内容来自 redirectAck.message');
+
+  // 冷却期内第二条补充：redirect 照常生效，但不再刷回执
+  await inboundFlow.handleEvent(
+    groupRawEvent({ messageId: 90011, userId: 10000001, nickname: 'ruaji', text: '再补充一点' }),
+  );
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(sessionStore.getBuffer(EXECUTION_KEY).pending.length, 0);
+  assert.equal(acks.length, 1, '冷却期内不重复发回执');
 });

@@ -194,12 +194,19 @@ export class InboundFlow {
       return;
     }
 
-    const arbitration = this.decisionFlow.arbitrateConcurrency(inbound, decision);
+    const arbitration = await this.decisionFlow.arbitrateConcurrency(inbound, decision);
     if (arbitration.action === 'drop') {
       // 主动插话遇到在途生成：统一丢弃，不排队（P2，与 handleProactive 的 busy 行为一致）。
       // 消息已进本地滑窗（recordToWindow 在裁决前无条件执行），上下文不丢。
       // 与 route=ignore 同样记 ignored，否则这条只计 received、任何桶都不落账。
       this.health?.increment('messages', 'ignored');
+      return;
+    }
+    if (arbitration.action === 'awaiting') {
+      // 主人的补充已通过 Hermes 原生 redirect 并入在途轮：不打断、不排队、
+      // 不触发新一轮生成（旧轮会带着修正继续跑完并投递）。只回一条带冷却的
+      // 回执，让主人知道补充生效了——与 Hermes busy_ack 同款节奏，防刷屏。
+      this._ackRedirect(inbound);
       return;
     }
     if (arbitration.action === 'queue') {
@@ -209,6 +216,25 @@ export class InboundFlow {
 
     this._buffer(inbound, decision);
     this._scheduleGeneration(inbound.executionKey);
+  }
+
+  /**
+   * redirect 回执。同会话 cooldownMs 内只发一条（主人连发多条补充时不刷屏），
+   * 发送失败静默吞——回执只是提示，不影响已生效的 redirect。
+   */
+  _ackRedirect(inbound) {
+    const ack = this.config.decision?.redirectAck;
+    if (!ack?.enabled || !ack?.message) return;
+    const now = Date.now();
+    const last = this._lastRedirectAckAt?.get(inbound.executionKey) ?? 0;
+    if (now - last < (ack.cooldownMs ?? 30000)) return;
+    if (!this._lastRedirectAckAt) this._lastRedirectAckAt = new Map();
+    this._lastRedirectAckAt.set(inbound.executionKey, now);
+    try {
+      this.commandFlow._reply(inbound, ack.message, '/redirect-ack');
+    } catch (err) {
+      this.log.warn('redirect 回执发送失败（忽略）', { correlationId: inbound.correlationId, error: err.message });
+    }
   }
 
   _publishReceived(inbound) {
@@ -287,6 +313,7 @@ export class InboundFlow {
       controller,
       source: decision.route,
       correlationId: inbound.correlationId,
+      sessionKey: inbound.executionKey,
     });
 
     // 门禁、去重、裁决与防抖均已通过；提示覆盖上下文、模型和分段投递。

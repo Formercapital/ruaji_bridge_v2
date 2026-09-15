@@ -72,6 +72,18 @@ export class ModelRouter {
     return this.defaultAdapter.resetSession(sessionKey, now);
   }
 
+  /**
+   * 会话级 redirect：并入该会话在途生成轮（Hermes 原生 redirect）。
+   * 只有主对话 adapter 需要支持；画像/表情匹配等旁路通道没有会话在途轮，
+   * 未实现时直接返回 not_supported，调用方回退旧行为。
+   */
+  redirect(sessionKey, text, opts) {
+    if (typeof this.defaultAdapter.redirect !== 'function') {
+      return Promise.resolve({ ok: false, code: 'not_supported', detail: '当前模型通道不支持 redirect' });
+    }
+    return this.defaultAdapter.redirect(sessionKey, text, opts);
+  }
+
   ping() {
     return this.defaultAdapter.ping();
   }
