@@ -183,6 +183,31 @@ export class SessionStore {
     buf.pending.unshift(...items);
   }
 
+  /**
+   * 从所有排队缓冲里切出已超时的排队项，其余原序保留。
+   * 排队超时用：在途生成迟迟不结束时，等太久的消息直接舍弃并回执，
+   * 不让后来的人无限堵在队列里。单项的入队时间记在 item.queuedAt。
+   *
+   * @param {number} maxAgeMs 超时阈值；<=0 视为关闭，恒返回空
+   * @param {number} [now] 当前时间，默认 this.now()
+   * @returns {{ inbound: object, decision: object, queuedAt: number }[]}
+   */
+  drainExpiredPending(maxAgeMs, now = this.now()) {
+    const expired = [];
+    if (!(Number(maxAgeMs) > 0)) return expired;
+    const cutoff = now - maxAgeMs;
+    for (const buf of this.pendingBuffers.values()) {
+      if (!buf.pending.length) continue;
+      const keep = [];
+      for (const item of buf.pending) {
+        if (item.queuedAt != null && item.queuedAt <= cutoff) expired.push(item);
+        else keep.push(item);
+      }
+      buf.pending = keep;
+    }
+    return expired;
+  }
+
   clearAllTimers() {
     for (const buf of this.pendingBuffers.values()) {
       if (buf.timer) {

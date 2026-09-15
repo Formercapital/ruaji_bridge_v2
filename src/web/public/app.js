@@ -1090,6 +1090,10 @@ async function renderSettings() {
   $('#cfg-decision-window').value = d.config.decision?.rateLimit?.windowMs ?? 300000;
   $('#cfg-decision-max-replies').value = d.config.decision?.rateLimit?.maxReplies ?? 5;
   $('#cfg-decision-window-size').value = d.config.decision?.localWindowSize ?? 15;
+  $('#cfg-decision-queue-timeout-enabled').checked = d.config.decision?.queueTimeout?.enabled !== false;
+  $('#cfg-decision-queue-timeout-sec').value = Math.round((d.config.decision?.queueTimeout?.timeoutMs ?? 120000) / 1000);
+  $('#cfg-decision-queue-timeout-notice').value = d.config.decision?.queueTimeout?.notice
+    ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~';
   $('#cfg-context-total-budget').value = d.config.context?.totalCharacterBudget ?? 12000;
   $('#cfg-context-source-budget').value = d.config.context?.perSourceCharacterBudget ?? 4000;
 
@@ -1211,6 +1215,11 @@ async function saveSettings() {
         rateLimit: {
           maxReplies: Number($('#cfg-decision-max-replies').value) || 5,
           windowMs: Number($('#cfg-decision-window').value) || 300000,
+        },
+        queueTimeout: {
+          enabled: $('#cfg-decision-queue-timeout-enabled').checked,
+          timeoutMs: Math.round(Number($('#cfg-decision-queue-timeout-sec').value) || 120) * 1000,
+          notice: $('#cfg-decision-queue-timeout-notice').value.trim(),
         },
       },
       context: {

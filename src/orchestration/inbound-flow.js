@@ -237,6 +237,82 @@ export class InboundFlow {
     }
   }
 
+  /**
+   * 排队超时巡检（decision.queueTimeout）。
+   *
+   * 在途生成迟迟不结束（上游慢 + 工具调用连环跑）时，排在缓冲里的消息
+   * 会一直等下去。巡检器周期性扫一遍所有排队缓冲：等满 timeoutMs 的
+   * 排队项直接从队列舍弃，并引用原消息回一条超时说明——堵着的人至少
+   * 知道这条没被无视，后面再发也不会排在尸体后面。
+   *
+   * 巡检周期固定 5s（unref），超时判定每次 tick 现读配置，面板改完即热生效。
+   */
+  startQueueSweeper() {
+    if (this._queueSweepTimer) return;
+    this._queueSweepTimer = setInterval(() => {
+      try {
+        this._sweepQueueTimeout();
+      } catch (err) {
+        this.log.error('排队超时巡检异常', { error: err?.message ?? String(err) });
+      }
+    }, 5000);
+    if (typeof this._queueSweepTimer.unref === 'function') this._queueSweepTimer.unref();
+  }
+
+  stopQueueSweeper() {
+    if (!this._queueSweepTimer) return;
+    clearInterval(this._queueSweepTimer);
+    this._queueSweepTimer = null;
+  }
+
+  _sweepQueueTimeout() {
+    const qt = this.config.decision?.queueTimeout;
+    if (!qt || qt.enabled === false) return;
+    const timeoutMs = Number(qt.timeoutMs);
+    if (!(timeoutMs > 0)) return;
+
+    const expired = this.sessions.drainExpiredPending(timeoutMs, this.sessions.now());
+    if (!expired.length) return;
+
+    // 按发言人归组：同一人的多条超时合成一条回执，引用其中最早的一条。
+    // 不同的人各回各的，引用各自的消息。
+    const byUser = new Map();
+    for (const item of expired) {
+      const uid = String(item.inbound.userId);
+      const list = byUser.get(uid);
+      if (list) list.push(item);
+      else byUser.set(uid, [item]);
+    }
+
+    for (const items of byUser.values()) {
+      const first = items[0].inbound;
+      const base = qt.notice || '⏳ 这条消息排队太久，已超时舍弃~';
+      const text = items.length > 1 ? `${base}（共 ${items.length} 条）` : base;
+      this.log.info('排队消息超时，已从队列舍弃', {
+        executionKey: first.executionKey,
+        userId: first.userId,
+        messageId: first.messageId,
+        count: items.length,
+      });
+      try {
+        // replyToMessageId 让回执带上引用气泡：OutboundBuilder 会把
+        // [CQ:reply,id=…] 拼在消息最前，同时首段照常 @ 发送者。
+        this.commandFlow._reply(first, text, '/queue-timeout', {
+          replyToMessageId: first.messageId,
+        });
+      } catch (err) {
+        this.log.warn('排队超时回执发送失败（忽略）', {
+          correlationId: first.correlationId,
+          error: err.message,
+        });
+      }
+    }
+
+    for (const item of expired) {
+      this.health?.increment('messages', 'ignored');
+    }
+  }
+
   _publishReceived(inbound) {
     this.eventBus.publish(
       createEvent(EVENTS.MESSAGE_RECEIVED, {
@@ -270,10 +346,13 @@ export class InboundFlow {
    * 防抖缓冲：800ms 内的多条消息合并成一次生成。
    * 迁移自 bridge.js:1741-1798，但去掉了那里嵌套两层 setTimeout + 重复
    * 排队逻辑的结构（同一段逻辑在 :1744 与 :1775 各写了一遍）。
+   *
+   * queuedAt 记的是入队时刻——排队超时巡检（_sweepQueueTimeout）按它
+   * 判定"这条已经在队列里等了多久"。
    */
   _buffer(inbound, decision) {
     const buf = this.sessions.getBuffer(inbound.executionKey);
-    buf.pending.push({ inbound, decision });
+    buf.pending.push({ inbound, decision, queuedAt: this.sessions.now() });
   }
 
   _scheduleGeneration(executionKey) {

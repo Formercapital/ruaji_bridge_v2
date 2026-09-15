@@ -10,7 +10,7 @@
  */
 
 import { MESSAGE_TYPES } from '../../contracts/messages.js';
-import { buildAtCq } from './cq.js';
+import { buildAtCq, buildReplyCq } from './cq.js';
 
 /**
  * 转义字面 CQ 码。
@@ -55,5 +55,11 @@ export function buildNapcatPayload(outbound) {
 
   const message = shouldMention ? `${buildAtCq(outbound.replyToUserId)} ${text}` : text;
 
-  return { isGroup, targetId: outbound.target.id, message };
+  // 引用回复：reply 段必须排在消息最前（OneBot v11 约定），拼在转义与 @ 之后
+  // 才不会被 escapeLiteralCqCodes 实体化。
+  const replyCq = outbound.metadata.replyToMessageId
+    ? buildReplyCq(outbound.metadata.replyToMessageId)
+    : '';
+
+  return { isGroup, targetId: outbound.target.id, message: `${replyCq}${message}` };
 }

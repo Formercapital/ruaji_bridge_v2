@@ -640,6 +640,21 @@
                 <span class="field-desc">保留最近多少条群聊消息作为上下文</span>
               </label>
             </div>
+            <div class="field-row-checks">
+              <label class="check">
+                <input type="checkbox" id="cfg-decision-queue-timeout-enabled"> 启用排队超时舍弃 (在途生成久堵时不再无限排队)
+              </label>
+            </div>
+            <div class="field-row">
+              <label>排队超时时长 (秒)
+                <input type="number" id="cfg-decision-queue-timeout-sec" placeholder="120">
+                <span class="field-desc">排队超过该时长的消息将被舍弃，并引用原消息回执已超时</span>
+              </label>
+              <label>超时回执文案
+                <input type="text" id="cfg-decision-queue-timeout-notice" placeholder="⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~">
+                <span class="field-desc">舍弃排队消息时引用原消息回复的提示语</span>
+              </label>
+            </div>
             <div class="field-row">
               <label>上下文总字符预算 (字数)
                 <input type="number" id="cfg-context-total-budget" placeholder="12000">

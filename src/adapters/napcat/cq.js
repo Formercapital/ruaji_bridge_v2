@@ -100,6 +100,14 @@ export function buildAtCq(userId) {
 }
 
 /**
+ * 引用回复 CQ 码。OneBot v11 约定 reply 段必须是消息的第一个段，
+ * 否则协议端不渲染引用气泡。id 为被引用消息的 message_id。
+ */
+export function buildReplyCq(messageId) {
+  return `[CQ:reply,id=${String(messageId).replace(/[^\w-]/g, '')}]`;
+}
+
+/**
  * 把 rawMessage 转成对人类、插件和模型都友好的纯文本。
  * - 保留 @昵称 / @QQ（与 renderAtMention 规则一致）
  * - 剥离媒体类 CQ 码（image/file/face 等替换为空白）

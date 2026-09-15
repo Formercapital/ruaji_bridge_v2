@@ -85,6 +85,7 @@ export class Lifecycle {
     }
 
     // ===== 阶段 3：接入消息流 =====
+    this.c.inboundFlow.startQueueSweeper();
     this.c.websocket.on('event', (event) => {
       this.c.health.update('websocket', { lastMessageAt: new Date().toISOString() });
       this.c.inboundFlow.handleEvent(event);
@@ -160,6 +161,7 @@ export class Lifecycle {
 
     // 顺序：先断消息流，再排空发送队列，最后落盘
     try { this.c.websocket.close(); } catch { /* ignore */ }
+    this.c.inboundFlow.stopQueueSweeper();
     this.c.inputStatus?.stop();
     this.c.sessionStore.clearAllTimers();
     try { this.c.sender.stop(); } catch { /* ignore */ }

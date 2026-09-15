@@ -47,7 +47,12 @@
     "rateLimit": { "maxReplies": 5, "windowMs": 300000 },
     "debounceMs": 800,
     "localWindowSize": 15,
-    "localWindowInject": 6
+    "localWindowInject": 6,
+    "queueTimeout": {
+      "enabled": true,
+      "timeoutMs": 120000,
+      "notice": "⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~"
+    }
   },
 
   "context": {

@@ -575,6 +575,32 @@ test('配置管理接口支持获取、校验、持久化与热更新', async ()
     assert.equal(badRotRes.status, 400);
     assert.ok(badRotData.error.includes('轮转次数'), `报错应提及轮转次数，实际: ${badRotData.error}`);
 
+    // 6.5 PUT decision.queueTimeout：落盘 + 回显 + 热生效（巡检器每次 tick 现读配置）
+    const qtRes = await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: { queueTimeout: { enabled: true, timeoutMs: 90000, notice: '⏳ 测试文案' } },
+      }),
+    });
+    assert.equal(qtRes.status, 200);
+    const qtCheck = await get('/api/config');
+    assert.equal(qtCheck.body.config.decision.queueTimeout.timeoutMs, 90000);
+    assert.equal(qtCheck.body.config.decision.queueTimeout.notice, '⏳ 测试文案');
+    assert.equal(container.config.decision.queueTimeout.timeoutMs, 90000, '排队超时应热生效到运行态');
+
+    // 6.6 PUT 非法排队超时时长（低于 1 秒）→ 400
+    const badQtRes = await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: { queueTimeout: { timeoutMs: 10 } },
+      }),
+    });
+    const badQtData = await badQtRes.json();
+    assert.equal(badQtRes.status, 400);
+    assert.ok(badQtData.error.includes('排队超时'), `报错应提及排队超时，实际: ${badQtData.error}`);
+
     // 7. POST /api/config/test-model
     const probeRes = await fetch(`${base}/api/config/test-model`, {
       method: 'POST',

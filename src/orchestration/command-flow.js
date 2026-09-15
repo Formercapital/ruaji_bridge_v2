@@ -412,7 +412,12 @@ export class CommandFlow {
     return { handled: true, command };
   }
 
-  _reply(inbound, text, command) {
+  /**
+   * 命令/回执的直发路径（不过模型）。
+   * @param {object} extraMetadata 追加到 OutboundMessage.metadata 的字段，
+   *        如 { replyToMessageId } 让回执带上 OneBot 引用气泡
+   */
+  _reply(inbound, text, command, extraMetadata = {}) {
     this.sender.enqueue(
       createOutboundMessage({
         correlationId: inbound.correlationId,
@@ -423,7 +428,7 @@ export class CommandFlow {
         },
         replyToUserId: inbound.userId,
         text,
-        metadata: { isFirst: true, command },
+        metadata: { isFirst: true, command, ...extraMetadata },
       }),
     );
     this.log.info('命令已执行', { correlationId: inbound.correlationId, command });

@@ -52,6 +52,16 @@ const DEFAULTS = {
     ownerRedirect: true,
     /** redirect 成功后给主人的回执；与 Hermes busy_ack 同款带冷却，防刷屏 */
     redirectAck: { enabled: true, message: '↪ 收到补充，已并入当前回复继续生成~', cooldownMs: 30000 },
+    /**
+     * 排队超时：在途生成期间排队的消息等满 timeoutMs 即从队列舍弃，并引用原消息
+     * 回一条 notice 说明已超时。防止上游响应慢 + 工具调用把队列堵死时，
+     * 后面的人无限等下去。置 enabled=false 或 timeoutMs<=0 关闭。
+     */
+    queueTimeout: {
+      enabled: true,
+      timeoutMs: 120000,
+      notice: '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~',
+    },
   },
   context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 2500 },
   reply: {

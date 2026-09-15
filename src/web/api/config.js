@@ -109,6 +109,12 @@ export function createConfigApi(deps) {
           debounceMs: config.decision?.debounceMs ?? 800,
           localWindowSize: config.decision?.localWindowSize ?? 15,
           localWindowInject: config.decision?.localWindowInject ?? 6,
+          queueTimeout: {
+            enabled: config.decision?.queueTimeout?.enabled !== false,
+            timeoutMs: config.decision?.queueTimeout?.timeoutMs ?? 120000,
+            notice: config.decision?.queueTimeout?.notice
+              ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~',
+          },
         },
         context: {
           totalCharacterBudget: config.context?.totalCharacterBudget ?? 12000,
@@ -300,6 +306,13 @@ export function createConfigApi(deps) {
         }
       }
 
+      if (updates.decision) {
+        const qt = updates.decision.queueTimeout;
+        if (qt?.timeoutMs != null && (Number(qt.timeoutMs) < 1000 || Number(qt.timeoutMs) > 86400000)) {
+          errors.push(`排队超时时长 非法: ${qt.timeoutMs}（应为 1 秒 ~ 24 小时对应的毫秒数）`);
+        }
+      }
+
       if (errors.length > 0) {
         return { status: 400, body: { error: errors.join('; ') } };
       }
@@ -412,6 +425,16 @@ export function createConfigApi(deps) {
             windowMs: updates.decision.rateLimit?.windowMs != null ? Number(updates.decision.rateLimit.windowMs) : (diskConfig.decision?.rateLimit?.windowMs ?? 300000),
           },
         };
+        // 排队超时：巡检器每次 tick 现读 config.decision.queueTimeout，落盘 + Object.assign 即热生效
+        if (updates.decision.queueTimeout) {
+          const prev = diskConfig.decision.queueTimeout || {};
+          const qt = updates.decision.queueTimeout;
+          diskConfig.decision.queueTimeout = {
+            enabled: qt.enabled != null ? Boolean(qt.enabled) : (prev.enabled !== false),
+            timeoutMs: clampInt(qt.timeoutMs, 1000, 86400000, prev.timeoutMs ?? 120000),
+            notice: qt.notice ? String(qt.notice).trim().slice(0, 200) : (prev.notice ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~'),
+          };
+        }
       }
 
       if (updates.context) {
