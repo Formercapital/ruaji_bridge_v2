@@ -84,6 +84,16 @@ export class ModelRouter {
     return this.defaultAdapter.redirect(sessionKey, text, opts);
   }
 
+  /**
+   * 会话级急停：硬停该会话在途轮（/stop）。同 redirect，仅主对话通道支持。
+   */
+  stop(sessionKey, opts) {
+    if (typeof this.defaultAdapter.stop !== 'function') {
+      return Promise.resolve({ ok: false, code: 'not_supported', detail: '当前模型通道不支持 stop' });
+    }
+    return this.defaultAdapter.stop(sessionKey, opts);
+  }
+
   ping() {
     return this.defaultAdapter.ping();
   }

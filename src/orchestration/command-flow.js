@@ -18,6 +18,7 @@
  */
 
 import { createOutboundMessage, MESSAGE_TYPES } from '../contracts/messages.js';
+import { PreemptedError } from '../contracts/errors.js';
 import { deriveCommandText, extractAtTargets } from '../adapters/napcat/inbound-normalizer.js';
 import { formatBar, getRelationStage, INITIAL_AFFECTION } from '../storage/affection-store.js';
 import { stripAffTags } from '../middleware/affection.js';
@@ -85,6 +86,11 @@ export class CommandFlow {
     if (NEW_SESSION_ALIASES.has(cmd)) {
       if (!isOwner) return this._deny(inbound, '/new');
       return this._resetSession(inbound);
+    }
+
+    if (cmd === '/stop' || cmd === '#stop' || cmd === '/停下') {
+      if (!isOwner) return this._deny(inbound, '/stop');
+      return this._stopGeneration(inbound);
     }
 
     if (cmd === '/好感' || cmd.startsWith('/好感度') || cmd.startsWith('/affection')) {
@@ -172,6 +178,67 @@ export class CommandFlow {
       this.log.error('会话重置失败', { correlationId: inbound.correlationId, error: err.message });
     }
     return this._reply(inbound, '新会话已开启，之前的上下文已清空。', '/new');
+  }
+
+  /**
+   * /stop 急停：redirect 让主人的普通消息不再打断在途轮后，这是唯一的
+   * 手动刹车。三层动作按序执行：
+   *   1. 掐桥侧在途生成（分段延迟中的旧回复立即停止投递）
+   *   2. 清排队缓冲——bot 互聊场景下队列里全是触发源，不清掉会立刻死灰复燃
+   *   3. 通知 Hermes 侧 hard interrupt（级联取消工具与子任务），不等
+   *      SSE 断连检测。404（网关未升级）/网络失败都忽略，本地 preempt 已保底。
+   */
+  async _stopGeneration(inbound) {
+    const key = inbound.executionKey;
+    const active = this.sessions?.getActive(key) ?? null;
+    const wasBusy = Boolean(active && !active.controller.signal.aborted);
+
+    // 防抖窗口内已调度未开跑的一轮也要取消
+    const buf = this.sessions?.getBuffer(key);
+    let cancelledTimer = false;
+    if (buf?.timer) {
+      clearTimeout(buf.timer);
+      buf.timer = null;
+      cancelledTimer = true;
+    }
+
+    const drained = this.sessions?.drainBuffer(key).length ?? 0;
+
+    let serverStopped = false;
+    if (wasBusy) {
+      this.sessions.preempt(
+        key,
+        new PreemptedError('stopped by owner /stop command', {
+          correlationId: inbound.correlationId,
+        }),
+      );
+      if (typeof this.models?.stop === 'function') {
+        try {
+          const r = await this.models.stop(active.sessionKey ?? key, { timeoutMs: 2500 });
+          serverStopped = Boolean(r?.ok);
+        } catch {
+          // 网关未升级或网络抖动：本地 preempt + SSE 断连检测已兜底
+        }
+      }
+    }
+
+    if (!wasBusy && !cancelledTimer && drained === 0) {
+      return this._reply(inbound, '当前没有在途生成。', '/stop');
+    }
+
+    this.log.info('主人 /stop 急停生效', {
+      correlationId: inbound.correlationId,
+      executionKey: key,
+      wasBusy,
+      cancelledTimer,
+      drained,
+      serverStopped,
+    });
+
+    const parts = ['⛔ 已停止当前生成'];
+    if (drained > 0) parts.push(`（丢弃排队消息 ${drained} 条）`);
+    if (wasBusy && !serverStopped) parts.push('服务端将由连接断开自动停止');
+    return this._reply(inbound, parts.join('') + '。', '/stop');
   }
 
   async _viewPortrayal(inbound) {

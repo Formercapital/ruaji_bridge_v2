@@ -340,6 +340,42 @@ export class OpenAiCompatibleAdapter {
   }
 
   /**
+   * 硬停该会话的在途轮（/stop 急停）。服务端对 agent 施加 hard interrupt，
+   * 级联取消工具与子任务。无在途轮时 stopped=false（幂等，不算错误）。
+   *
+   * @param {string} sessionKey 与 generate() 同一的会话键
+   * @returns {Promise<{ ok: boolean, stopped?: boolean, code?: string, detail?: string }>}
+   */
+  async stop(sessionKey, { timeoutMs = 8000 } = {}) {
+    const key = OpenAiCompatibleAdapter.sanitizeSessionKey(sessionKey);
+    if (!key) return { ok: false, code: 'invalid_input', detail: '空的会话键' };
+
+    const url = `${this.baseUrl.replace(/\/v1$/, '')}/v1/chat/stop`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    if (this.sessionHeader) headers[this.sessionHeader] = this.getSessionId(sessionKey);
+
+    try {
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return { ok: true, stopped: Boolean(data.stopped) };
+      return {
+        ok: false,
+        code: data.error?.code ?? `http_${res.status}`,
+        detail: data.error?.message ?? `HTTP ${res.status}`,
+      };
+    } catch (err) {
+      const why = err.name === 'TimeoutError' || err.name === 'AbortError' ? '请求超时' : err.message;
+      return { ok: false, code: 'network_error', detail: why };
+    }
+  }
+
+  /**
    * 把补充文本并入该会话正在生成的轮次（Hermes 原生 redirect）。
    * 服务端会取消在途模型请求、保留已生成前缀、把 correction 作为 user
    * 消息追加后继续；若该轮正在执行工具则降级为 steer（等工具跑完再注入）。
