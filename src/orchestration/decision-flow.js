@@ -258,9 +258,15 @@ export class DecisionFlow {
   /**
    * redirect 用的人话文本：带 OneBot at 段的原文对模型没有意义，
    * 取 text（已去掉 CQ 码）；没有就退 content。
+   * 前缀主人身份——在途轮可能是回别人的，裸文本会被模型误认为是
+   * 该轮发起者说的；标明介入者身份（昵称+id）让模型正确归因。
    */
   _redirectTextOf(inbound) {
     const t = String(inbound.text ?? '').trim() || String(inbound.content ?? '').trim();
-    return t || null;
+    if (!t) return null;
+    if (!inbound.flags.isOwner) return t;
+    const name = inbound.sender?.displayName || inbound.sender?.nickname || inbound.userId;
+    const ownerTitle = this.config.identity?.ownerTitle || '主人';
+    return `【${ownerTitle}介入】${name}(ID:${inbound.userId})在你回复期间补充：${t}`;
   }
 }

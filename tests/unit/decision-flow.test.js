@@ -330,6 +330,68 @@ test('redirect 网络失败也回退硬打断，不能吞掉主人的消息', as
   assert.equal(controller.signal.aborted, true);
 });
 
+test('redirect 文本带主人身份前缀：模型能归因是主人介入而非原轮发起者', async () => {
+  const sessions = new SessionStore();
+  const redirectCalls = [];
+  const flow = makeFlow();
+  flow.modelRouter = { redirect: async (key, text) => { redirectCalls.push(text); return { ok: true }; } };
+  flow.config = { ...flow.config, decision: { ...flow.config.decision, ownerRedirect: true } };
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '中世纪我似乎有订阅，你要不看看steamid呢',
+    sender: { nickname: 'ruaji', card: '', displayName: 'ruaji(阵亡)' },
+    flags: { isOwner: true },
+  });
+  await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(redirectCalls.length, 1);
+  assert.ok(
+    redirectCalls[0].startsWith('【主人介入】ruaji(阵亡)(ID:10000001)在你回复期间补充：'),
+    `实际文本: ${redirectCalls[0]}`,
+  );
+  assert.ok(redirectCalls[0].endsWith('中世纪我似乎有订阅，你要不看看steamid呢'));
+});
+
+test('redirect 前缀用 ownerTitle 配置，昵称缺失时退 userId', async () => {
+  const sessions = new SessionStore();
+  const redirectCalls = [];
+  const flow = makeFlow();
+  flow.modelRouter = { redirect: async (key, text) => { redirectCalls.push(text); return { ok: true }; } };
+  flow.config = {
+    ...flow.config,
+    identity: { ...flow.config.identity, ownerTitle: '爸爸' },
+    decision: { ...flow.config.decision, ownerRedirect: true },
+  };
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  // 无 displayName/nickname 的 sender
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '补充',
+    flags: { isOwner: true },
+    sender: undefined,
+  });
+  await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.ok(redirectCalls[0].startsWith('【爸爸介入】10000001(ID:10000001)在你回复期间补充：'), `实际: ${redirectCalls[0]}`);
+});
+
 test('Golden fixture 的裁决结果符合预期', async () => {
   const logger = createTestLogger();
   const normalizer = new InboundNormalizer({ identity: CONFIG.identity, wake: CONFIG.wake, logger });
