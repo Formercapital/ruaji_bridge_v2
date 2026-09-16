@@ -39,40 +39,39 @@ export function stripMarkdown(text, { onLeak } = {}) {
     return `MEMEHOLD${memeMarkers.length - 1}X`;
   });
 
-  // 3. 代码块三反引号（保留内部文本）
+  // 3. 代码块三反引号与行内代码（保留内部文本，并去除所有反引号）
   str = str.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, '$1');
-
-  // 4. 行内代码
   str = str.replace(/`([^`\n]+)`/g, '$1');
+  str = str.replace(/`/g, '');
 
-  // 5. 标题 -> 【标题】
+  // 4. 标题 -> 【标题】
   str = str.replace(/^(#{1,6})\s+(.+)$/gm, (_match, _hashes, title) => {
     const cleanTitle = title.replace(/\*\*(.*?)\*\*/g, '$1').trim();
     return `【${cleanTitle}】`;
   });
 
-  // 6. 加粗与斜体
+  // 5. 分割线（--- 或 ***，不匹配下划线）
+  str = str.replace(/^[ \t]*[-*]{3,}[ \t]*$/gm, '');
+
+  // 6. 加粗与斜体（仅处理星号与删除线；绝不清理下划线 _，避免破坏代码变量与脚本名）
   str = str.replace(/\*\*\*(.*?)\*\*\*/g, '$1');
   str = str.replace(/\*\*(.*?)\*\*/g, '$1');
-  str = str.replace(/__([^_]+)__/g, '$1');
   str = str.replace(/\*([^*\n]+)\*/g, '$1');
-  str = str.replace(/_([^_\n]+)_/g, '$1');
   str = str.replace(/~~(.*?)~~/g, '$1');
+  // 清理因分段切句或未闭合而残留的孤立加粗标记 **
+  str = str.replace(/\*\*/g, '');
 
-  // 7. 分割线
-  str = str.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, '');
-
-  // 8. 引用符号
+  // 7. 引用符号
   str = str.replace(/^[ \t]*>[ \t]?/gm, '');
 
-  // 9. 无序列表 -> ·
+  // 8. 无序列表 -> ·
   str = str.replace(/^[ \t]*[-*+][ \t]+/gm, '· ');
 
-  // 10. 超链接
+  // 9. 超链接
   str = str.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1 ($2)');
   str = str.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 
-  // 11. 连续换行最多保留 2 个
+  // 10. 连续换行最多保留 2 个
   str = str.replace(/\n{3,}/g, '\n\n');
 
   // 还原

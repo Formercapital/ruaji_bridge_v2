@@ -10,21 +10,27 @@ test('标题转成【】', () => {
   assert.equal(stripMarkdown('## **加粗标题**'), '【加粗标题】');
 });
 
-test('加粗、斜体、删除线全部剥掉', () => {
+test('加粗、斜体、删除线剥掉，但下划线原样保留', () => {
   assert.equal(stripMarkdown('这是 **重点** 内容'), '这是 重点 内容');
   assert.equal(stripMarkdown('这是 *斜体* 内容'), '这是 斜体 内容');
   assert.equal(stripMarkdown('这是 ***三星*** 内容'), '这是 三星 内容');
   assert.equal(stripMarkdown('这是 ~~删掉~~ 内容'), '这是 删掉 内容');
-  assert.equal(stripMarkdown('这是 __下划粗__ 内容'), '这是 下划粗 内容');
+  assert.equal(stripMarkdown('这是 __下划粗__ 内容'), '这是 __下划粗__ 内容');
+  assert.equal(stripMarkdown('cannot convert to unknown type _jsw_bb_storage'), 'cannot convert to unknown type _jsw_bb_storage');
+  assert.equal(stripMarkdown('重命名为 _JSW_BB_Storage.psc'), '重命名为 _JSW_BB_Storage.psc');
+  assert.equal(stripMarkdown('@Former Ancapistan **不要替换！'), '@Former Ancapistan 不要替换！');
+  assert.equal(stripMarkdown('尾巴落单的**'), '尾巴落单的');
 });
 
-test('代码块与行内代码保留内容、去掉反引号', () => {
+test('代码块与行内代码保留内容、去掉所有反引号', () => {
   assert.equal(stripMarkdown('```js\nconst a = 1;\n```'), 'const a = 1;');
   assert.equal(stripMarkdown('改 `config.yaml` 就行'), '改 config.yaml 就行');
+  assert.equal(stripMarkdown('``` 未闭合代码块'), '未闭合代码块');
 });
 
 test('列表符号转成 ·，引用与分割线移除', () => {
   assert.equal(stripMarkdown('- 第一项\n- 第二项'), '· 第一项\n· 第二项');
+  assert.equal(stripMarkdown('* 第一项\n* 第二项'), '· 第一项\n· 第二项');
   assert.equal(stripMarkdown('> 引用内容'), '引用内容');
   assert.equal(stripMarkdown('前\n\n---\n\n后'), '前\n\n后');
 });
