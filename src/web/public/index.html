@@ -260,6 +260,15 @@
                 <input type="text" id="cfg-owner-id" placeholder="如: 10000001">
                 <span class="field-desc">拥有最高管理指令与即时打断特权</span>
               </label>
+              <label>管理员 QQ 号 (adminIds)
+                <input type="text" id="cfg-admin-ids" placeholder="用逗号或空格分隔多个 QQ 号">
+                <span class="field-desc">可介入在途回复；不继承主人豁免，聊天命令须逐项授权</span>
+              </label>
+              <fieldset>
+                <legend>管理员聊天命令授权</legend>
+                <div id="cfg-admin-commands"></div>
+                <span class="field-desc">所有管理员共用以下授权，新增命令默认不授权；敏感命令和工具审批始终仅主人可用</span>
+              </fieldset>
               <label>机器人 QQ 号 (robotId)
                 <input type="text" id="cfg-robot-id" placeholder="如: 11111111">
                 <span class="field-desc">用于过滤自身消息与识别真 @ 触发</span>

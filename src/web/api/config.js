@@ -9,6 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { commandCatalog, normalizeAdminCommands } from '../../core/command-registry.js';
 
 /** 取正数，非法（0/负数/NaN）时回落到 fallback */
 function positiveOr(value, fallback) {
@@ -61,6 +62,8 @@ export function createConfigApi(deps) {
         mode: config.mode ?? 'live',
         identity: {
           ownerId: config.identity?.ownerId ?? '',
+          adminIds: Array.isArray(config.identity?.adminIds) ? [...config.identity.adminIds] : [],
+          adminCommands: normalizeAdminCommands(config.identity?.adminCommands),
           robotId: config.identity?.robotId ?? '',
           botName: config.identity?.botName ?? '瑞姬',
           ownerTitle: config.identity?.ownerTitle ?? '主人',
@@ -227,6 +230,7 @@ export function createConfigApi(deps) {
       return {
         body: {
           config: safeConfig,
+          commands: commandCatalog(),
           metadata,
           configFile: configPath,
         },
@@ -254,6 +258,14 @@ export function createConfigApi(deps) {
 
       // 1. 基础校验
       if (updates.identity) {
+        if (updates.identity.adminIds !== undefined && (!Array.isArray(updates.identity.adminIds) ||
+          updates.identity.adminIds.some((id) => !/^\d+$/.test(String(id).trim())))) {
+          errors.push('管理员 QQ 号必须为数字数组');
+        }
+        if (updates.identity.adminCommands !== undefined && (!Array.isArray(updates.identity.adminCommands) ||
+          updates.identity.adminCommands.some((id) => !commandCatalog().some((c) => c.id === id && c.adminGrantable)))) {
+          errors.push('管理员授权包含未知命令或主人专属命令');
+        }
         if (!updates.identity.robotId) errors.push('机器人 QQ 号 (robotId) 不能为空');
         if (!updates.identity.ownerId) errors.push('主人 QQ 号 (ownerId) 不能为空');
         if (!updates.identity.botName) errors.push('机器人称谓 (botName) 不能为空');
@@ -324,6 +336,10 @@ export function createConfigApi(deps) {
         diskConfig.identity = {
           ...(diskConfig.identity || {}),
           ownerId: String(updates.identity.ownerId).trim(),
+          adminCommands: normalizeAdminCommands(updates.identity.adminCommands ?? diskConfig.identity?.adminCommands),
+          adminIds: Array.isArray(updates.identity.adminIds)
+            ? updates.identity.adminIds.map((u) => String(u).trim()).filter(Boolean)
+            : (diskConfig.identity?.adminIds || []),
           robotId: String(updates.identity.robotId).trim(),
           botName: String(updates.identity.botName).trim(),
           // 称呼可留空：留空即回落默认「主人」，不是清掉

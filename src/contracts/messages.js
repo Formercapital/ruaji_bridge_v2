@@ -73,6 +73,8 @@ export function createInboundMessage(input = {}) {
     flags: {
       isSelf: input.flags?.isSelf === true,
       isOwner: input.flags?.isOwner === true,
+      isAdmin: input.flags?.isOwner !== true && input.flags?.isAdmin === true,
+      role: input.flags?.isOwner === true ? 'owner' : (input.flags?.isAdmin === true ? 'admin' : 'member'),
       isAtBot: input.flags?.isAtBot === true,
       isNameCall: input.flags?.isNameCall === true,
       isCommand: input.flags?.isCommand === true,

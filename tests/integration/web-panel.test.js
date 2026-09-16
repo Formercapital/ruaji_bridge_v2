@@ -44,6 +44,33 @@ async function withPanel(opts = {}, fn) {
   }
 }
 
+test('administrator command settings round-trip, hot apply, reject sensitive grants and revoke', async () => {
+  await withPanel({}, async ({ container, base, get }) => {
+    const initial = (await get('/api/config')).body;
+    assert.deepEqual(initial.config.identity.adminCommands, []);
+    assert.equal(initial.commands.find((c) => c.id === '/new').adminGrantable, false);
+    const put = (identity) => fetch(`${base}/api/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity }),
+    });
+    const identity = { ...initial.config.identity, adminIds: ['20000002'], adminCommands: ['/stop'] };
+    assert.equal((await put(identity)).status, 200);
+    assert.deepEqual(container.config.identity.adminCommands, ['/stop']);
+    assert.deepEqual((await get('/api/config')).body.config.identity.adminIds, ['20000002']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(container.config.paths.configFile, 'utf8')).identity.adminCommands, ['/stop']);
+    for (const adminCommands of [['/new'], ['/model'], ['/approve'], ['/future'], '*']) {
+      assert.equal((await put({ ...identity, adminCommands })).status, 400);
+      assert.deepEqual(container.config.identity.adminCommands, ['/stop']);
+    }
+    assert.equal((await put({ ...identity, adminIds: '20000002' })).status, 400);
+    const { adminCommands, ...legacyIdentity } = identity;
+    assert.equal((await put(legacyIdentity)).status, 200);
+    assert.deepEqual(container.config.identity.adminCommands, ['/stop']);
+    assert.equal((await put({ ...identity, adminCommands: [], adminIds: [] })).status, 200);
+    assert.deepEqual(container.config.identity.adminCommands, []);
+    assert.deepEqual(container.config.identity.adminIds, []);
+  });
+});
+
 test('静态首页与前端资源可访问', async () => {
   await withPanel({}, async ({ base }) => {
     const html = await fetch(`${base}/`);

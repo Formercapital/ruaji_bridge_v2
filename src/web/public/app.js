@@ -1003,6 +1003,19 @@ async function renderSettings() {
 
   // 1. 身份与唤醒
   $('#cfg-owner-id').value = d.config.identity?.ownerId ?? '';
+  $('#cfg-admin-ids').value = (d.config.identity?.adminIds || []).join(', ');
+  const commandOptions = $('#cfg-admin-commands');
+  commandOptions.replaceChildren();
+  for (const command of d.commands || []) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = command.id;
+    input.disabled = !command.adminGrantable;
+    input.checked = command.adminGrantable && (d.config.identity?.adminCommands || []).includes(command.id);
+    label.append(input, document.createTextNode(` ${command.id}${command.adminGrantable ? '' : '（仅主人）'}`));
+    commandOptions.append(label);
+  }
   $('#cfg-robot-id').value = d.config.identity?.robotId ?? '';
   $('#cfg-bot-name').value = d.config.identity?.botName ?? '';
   $('#cfg-owner-title').value = d.config.identity?.ownerTitle ?? '主人';
@@ -1122,6 +1135,9 @@ async function saveSettings() {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const adminIds = $('#cfg-admin-ids').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
+    const adminCommands = Array.from(document.querySelectorAll('#cfg-admin-commands input:checked:not(:disabled)'), (input) => input.value);
+
     const rawPrivateWhitelist = $('#cfg-private-whitelist').value;
     const privateWhitelist = rawPrivateWhitelist
       .split(/[,，\s]+/)
@@ -1150,6 +1166,8 @@ async function saveSettings() {
       mode: $('#cfg-mode').value,
       identity: {
         ownerId: $('#cfg-owner-id').value.trim(),
+        adminIds,
+        adminCommands,
         robotId: $('#cfg-robot-id').value.trim(),
         botName: $('#cfg-bot-name').value.trim(),
         ownerTitle: $('#cfg-owner-title').value.trim(),

@@ -209,13 +209,14 @@ test('在途生成时，被真 @ 的 auto 消息仍然排队（真 @ 优先于�
   const atMe = makeInbound({ executionKey: 'group_793019665', flags: { isAtBot: true } });
   assert.equal((await flow.arbitrateConcurrency(atMe, { route: ROUTES.AUTO })).action, 'queue');
 
-  // 主人的 auto 消息照旧走打断特权，不被丢弃分支截走
+  // 主人的 auto 消息同样不享有介入权。
   const owner = makeInbound({
     userId: '10000001',
     executionKey: 'group_793019665',
     flags: { isOwner: true },
   });
-  assert.equal((await flow.arbitrateConcurrency(owner, { route: ROUTES.AUTO })).action, 'preempt');
+  assert.equal((await flow.arbitrateConcurrency(owner, { route: ROUTES.AUTO })).action, 'drop');
+  assert.equal(controller.signal.aborted, false);
 });
 
 test('不传 decision 时仲裁行为与旧签名一致（永不 drop）', async () => {

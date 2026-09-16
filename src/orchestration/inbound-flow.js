@@ -24,6 +24,7 @@ import { EVENTS, createEvent, newCorrelationId } from '../contracts/events.js';
 import { ROUTES } from '../contracts/capabilities.js';
 import { MESSAGE_TYPES, createInboundMessage } from '../contracts/messages.js';
 import { classifyError } from '../contracts/errors.js';
+import { getIdentityRole } from '../core/permission-policy.js';
 
 export class InboundFlow {
   /**
@@ -474,6 +475,8 @@ export class InboundFlow {
       sender: { nickname: nickname ?? '群友', card: '', displayName: nickname ?? '群友' },
       flags: {
         isOwner: String(userId) === String(this.config.identity.ownerId),
+        isAdmin: getIdentityRole(userId, this.config.identity) === 'admin',
+        role: getIdentityRole(userId, this.config.identity),
       },
       media: [],
       extensions: { napcat: {}, proactive: true },

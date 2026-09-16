@@ -385,7 +385,7 @@ test('非主人的 /new 被静默拒绝', async (t) => {
 
   assert.equal(model.calls.length, 0);
   assert.equal(container.sender.dryRunLog.length, 0, '静默拒绝，不给任何回应');
-  assert.ok(container.logger.find('拒绝非主人的管理命令').length >= 1);
+  assert.ok(container.logger.find('拒绝未授权的聊天命令').length >= 1);
 });
 
 test('主人的 /new 会轮换模型会话', async (t) => {

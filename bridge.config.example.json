@@ -6,6 +6,8 @@
 
   "identity": {
     "ownerId": "10000001",
+    "adminIds": [],
+    "adminCommands": [],
     "robotId": "11111111",
     "botName": "BOT_NAME",
     "ownerTitle": "主人",

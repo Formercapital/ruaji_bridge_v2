@@ -20,6 +20,7 @@ import {
   buildExecutionKey,
 } from '../../contracts/messages.js';
 import { validateNapcatEvent } from '../../contracts/schemas/index.js';
+import { getIdentityRole } from '../../core/permission-policy.js';
 import {
   parseCqMessage,
   parseCqParams,
@@ -155,6 +156,8 @@ export class InboundNormalizer {
       flags: {
         isSelf: false,
         isOwner: userId === String(this.identity.ownerId),
+        isAdmin: getIdentityRole(userId, this.identity) === 'admin',
+        role: getIdentityRole(userId, this.identity),
         isAtBot,
         isNameCall,
         isCommand: false, // 由 command-flow 判定后回填

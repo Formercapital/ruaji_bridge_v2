@@ -3,9 +3,8 @@
  *
  * 命令在本层直接执行，不发给模型。迁移自 bridge.js:1499-1681。
  *
- * 权限（原样保留）：
- *   仅主人：/new（及其变体）、/model
- *   所有人：/好感度、/收集表情、/完成收集
+ * 命令、别名、默认权限统一登记在 core/command-registry.js。
+ * 管理员逐命令显式授权；敏感命令只对主人开放。
  *
  * 明确不迁移：
  *   /model 的 python scripts/switch_model.py 子进程调用。它是旧 Bridge 直接
@@ -23,8 +22,9 @@ import { deriveCommandText, extractAtTargets } from '../adapters/napcat/inbound-
 import { formatBar, getRelationStage, INITIAL_AFFECTION } from '../storage/affection-store.js';
 import { stripAffTags } from '../middleware/affection.js';
 import { mergeUnique } from '../storage/portrayal-store.js';
+import { getIdentityRole, canUseCommand } from '../core/permission-policy.js';
 
-const NEW_SESSION_ALIASES = new Set(['/new', '///new', '////new', '#new']);
+import { findCommand } from '../core/command-registry.js';
 
 /**
  * 解析命令末尾的数字参数（如 /画像 @某人 50、/冷暴力 @某人 30）。
@@ -77,75 +77,30 @@ export class CommandFlow {
     const cmd = deriveCommandText(inbound.text, this.config.identity.botName);
     if (!cmd.startsWith('/') && !cmd.startsWith('#')) return { handled: false, command: null };
 
-    const isOwner = inbound.flags.isOwner;
+    const entry = findCommand(cmd);
+    const role = getIdentityRole(inbound.userId, this.config.identity);
+    // Unknown slash commands must not become an unguarded path to upstream tools.
+    if (!entry) return role === 'owner' ? { handled: false, command: null } : this._deny(inbound, cmd);
+    inbound.flags.isCommand = true;
+    if (!canUseCommand(role, entry.id, this.config.identity)) return this._deny(inbound, entry.id);
+    if (entry.forward) return { handled: false, command: null };
+    if (this.config.favourUltraEnabled && entry.favour) {
+      const alias = entry.aliases.find((alias) => cmd === alias || (cmd.startsWith(alias) && /^\s/.test(cmd.slice(alias.length))));
+      return this._relayFavourCommand(inbound, entry.id + cmd.slice(alias?.length ?? entry.id.length));
+    }
+    if (entry.template) return this[entry.handler](inbound, entry.template, entry.id);
+    return this[entry.handler](inbound, cmd);
+  }
 
-    if (this.config.favourUltraEnabled && (cmd === '/好感' || cmd.startsWith('/好感度') || cmd.startsWith('/affection') || cmd.startsWith('/冷暴力') || cmd.startsWith('/取消冷暴力'))) {
-      return this._relayFavourCommand(inbound, cmd);
-    }
+  _startCollect(inbound, cmd) {
+    const parts = cmd.replace(/^\/(?:收集表情|收集|collect)\s*/, '').trim().split(/\s+/);
+    const category = parts[0] || '常用';
+    const tag = parts[1] || category;
+    return this._reply(inbound, this.memes ? this.memes.startCollect(inbound.userId, category, tag) : '表情包管理器未就绪', '/收集表情');
+  }
 
-    if (NEW_SESSION_ALIASES.has(cmd)) {
-      if (!isOwner) return this._deny(inbound, '/new');
-      return this._resetSession(inbound);
-    }
-
-    if (cmd === '/stop' || cmd === '#stop' || cmd === '/停下') {
-      if (!isOwner) return this._deny(inbound, '/stop');
-      return this._stopGeneration(inbound);
-    }
-
-    if (cmd === '/好感' || cmd.startsWith('/好感度') || cmd.startsWith('/affection')) {
-      return this._affectionStats(inbound);
-    }
-
-    if (cmd.startsWith('/查看画像') || cmd.startsWith('/画像详情')) {
-      return this._viewPortrayal(inbound);
-    }
-
-    if (cmd.startsWith('/正画像')) {
-      return this._generatePortrayal(inbound, 'positive', '/正画像');
-    }
-    if (cmd.startsWith('/负画像')) {
-      return this._generatePortrayal(inbound, 'negative', '/负画像');
-    }
-    if (cmd.startsWith('/克隆人格') || cmd.startsWith('/克隆')) {
-      return this._generatePortrayal(inbound, 'clone', '/克隆人格');
-    }
-    if (cmd.startsWith('/找对象') || cmd.startsWith('/match')) {
-      return this._generatePortrayal(inbound, 'match', '/找对象');
-    }
-    if (cmd.startsWith('/画像') || cmd.startsWith('/portrayal')) {
-      return this._generatePortrayal(inbound, 'portrait', '/画像');
-    }
-
-    if (cmd.startsWith('/取消冷暴力') || cmd.startsWith('/解除冷暴力') || cmd.startsWith('/unfreeze')) {
-      if (!isOwner) return this._deny(inbound, '/取消冷暴力');
-      return this._liftColdViolenceCommand(inbound);
-    }
-
-    if (cmd.startsWith('/冷暴力') || cmd.startsWith('/freeze')) {
-      if (!isOwner) return this._deny(inbound, '/冷暴力');
-      return this._triggerColdViolenceCommand(inbound, cmd);
-    }
-
-    if (cmd === '/model' || cmd.startsWith('/model ') || cmd.startsWith('///model ')) {
-      if (!isOwner) return this._deny(inbound, '/model');
-      return this._modelCommand(inbound, cmd);
-    }
-
-    // 表情包批量收集模式
-    if (cmd === '/收集' || cmd.startsWith('/收集表情') || cmd.startsWith('/collect')) {
-      const parts = cmd.replace(/^\/(?:收集表情|收集|collect)\s*/, '').trim().split(/\s+/);
-      const category = parts[0] || '常用';
-      const tag = parts[1] || category;
-      const replyText = this.memes ? this.memes.startCollect(inbound.userId, category, tag) : '表情包管理器未就绪';
-      return this._reply(inbound, replyText, '/收集表情');
-    }
-    if (['/完成收集', '/退出收集', '/stop_collect', '/done'].includes(cmd)) {
-      const replyText = this.memes ? this.memes.stopCollect(inbound.userId) : '表情包管理器未就绪';
-      return this._reply(inbound, replyText, '/完成收集');
-    }
-
-    return { handled: false, command: null };
+  _stopCollect(inbound) {
+    return this._reply(inbound, this.memes ? this.memes.stopCollect(inbound.userId) : '表情包管理器未就绪', '/完成收集');
   }
 
   async _relayFavourCommand(inbound, command) {
@@ -208,7 +163,7 @@ export class CommandFlow {
     if (wasBusy) {
       this.sessions.preempt(
         key,
-        new PreemptedError('stopped by owner /stop command', {
+        new PreemptedError('stopped by authorized /stop command', {
           correlationId: inbound.correlationId,
         }),
       );
@@ -226,7 +181,7 @@ export class CommandFlow {
       return this._reply(inbound, '当前没有在途生成。', '/stop');
     }
 
-    this.log.info('主人 /stop 急停生效', {
+    this.log.info('已授权的 /stop 急停生效', {
       correlationId: inbound.correlationId,
       executionKey: key,
       wasBusy,
@@ -470,7 +425,7 @@ export class CommandFlow {
   }
 
   _deny(inbound, command) {
-    this.log.warn('拒绝非主人的管理命令', {
+    this.log.warn('拒绝未授权的聊天命令', {
       correlationId: inbound.correlationId,
       userId: inbound.userId,
       command,

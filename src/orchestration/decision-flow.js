@@ -23,6 +23,7 @@
  */
 
 import { CAPABILITIES, ROUTES, TRIGGER_TYPES, normalizeRoute } from '../contracts/capabilities.js';
+import { canIntervene, getIdentityRole } from '../core/permission-policy.js';
 import { MESSAGE_TYPES } from '../contracts/messages.js';
 import { PreemptedError } from '../contracts/errors.js';
 
@@ -180,13 +181,14 @@ export class DecisionFlow {
    * 并发控制与打断特权（附录 1）。
    *
    * 群互斥锁按 executionKey（= 会话维度）。在途生成期间：
-   *   - 主人 的新消息拥有最高优先级。默认先尝试 Hermes 原生 redirect——
+   *   - 非 auto 的主人新消息拥有最高优先级。默认先尝试 Hermes 原生 redirect——
    *     不打断在途轮，把新消息作为"补充修正"并入当前生成（模型请求被取消
    *     重试，已生成前缀保留），成功返回 { action: 'awaiting' }；跑不动
    *     （无在途轮/正在收尾/网络失败/未启用）则回退旧的立即硬打断。
    *     redirect 语义与 Hermes 原生 gateway 的 busy_input_mode=interrupt +
    *     active-turn redirect 完全一致（"↪ Redirected current run"）。
-   *   - 主动插话（auto）且没有真 @：直接丢弃，不排队（P2，与 handleProactive 的 busy 行为一致）
+   *   - auto / 外部主动消息不享有介入权，即使发送者是主人或管理员。
+   *     没有真 @：直接丢弃；有真 @：排队，不 redirect、不打断。
    *   - 其余群友的新消息只入缓冲队列排队，不打断
    *
    * 丢弃判定放在这里而不是 InboundFlow：仲裁的三条分支必须在同一处决定，
@@ -194,22 +196,26 @@ export class DecisionFlow {
    * 会误判成积压。
    *
    * @param {object} inbound
-   * @param {{ route?: string }|null} [decision] 本条消息的裁决结果。不传等于旧行为（永不 drop）。
+   * @param {{ route?: string }|null} [decision] 本条消息的裁决结果；外部主动消息另由 proactive 标记识别。
    * @returns {Promise<{ action: 'start'|'preempt'|'queue'|'drop'|'awaiting', redirected?: boolean }>}
    */
   async arbitrateConcurrency(inbound, decision = null) {
     const key = inbound.executionKey;
     if (!this.sessions.isBusy(key)) return { action: 'start' };
 
-    if (inbound.flags.isOwner) {
-      if (this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
+    const role = getIdentityRole(inbound.userId, this.config.identity);
+    const isAuto = decision?.route === ROUTES.AUTO || inbound.extensions?.proactive === true;
+    if (!isAuto && canIntervene(role)) {
+      // Admin intervention must enter the normal context/interception pipeline.
+      // Redirect skips that pipeline and is therefore reserved for the owner.
+      if (role === 'owner' && this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
         const active = this.sessions.getActive(key);
         const result = await this.modelRouter.redirect(
           active?.sessionKey ?? key,
           this._redirectTextOf(inbound),
         );
         if (result.ok) {
-          this.log.info('主人补充已并入在途生成（redirect），不打断当前轮', {
+          this.log.info('管理者补充已并入在途生成（redirect），不打断当前轮', {
             correlationId: inbound.correlationId,
             executionKey: key,
           });
@@ -224,11 +230,11 @@ export class DecisionFlow {
       }
       const preempted = this.sessions.preempt(
         key,
-        new PreemptedError('interrupted by newer owner message', {
+        new PreemptedError('interrupted by newer owner/admin message', {
           correlationId: inbound.correlationId,
         }),
       );
-      this.log.info('主人打断特权生效，已中断在途生成', {
+      this.log.info('管理者介入生效，已中断在途生成', {
         correlationId: inbound.correlationId,
         executionKey: key,
         preempted,
@@ -238,7 +244,7 @@ export class DecisionFlow {
 
     // 真 @ 例外与上面的 at_overrides_provider_ignore 是同一个不变量：被点名还不理人
     // 不可接受，即使裁决者把这条标成了 auto，也要排队等下一轮，不能静默丢。
-    if (decision?.route === ROUTES.AUTO && !inbound.flags.isAtBot) {
+    if (isAuto && !inbound.flags.isAtBot) {
       this.log.info('主动插话遇到在途生成，放弃本次', {
         correlationId: inbound.correlationId,
         executionKey: key,
@@ -271,9 +277,10 @@ export class DecisionFlow {
       t = rawText || String(inbound.content ?? '').trim();
     }
     if (!t) return null;
-    if (!inbound.flags.isOwner) return t;
+    const role = getIdentityRole(inbound.userId, this.config.identity);
+    if (!canIntervene(role)) return t;
     const name = inbound.sender?.displayName || inbound.sender?.nickname || inbound.userId;
-    const ownerTitle = this.config.identity?.ownerTitle || '主人';
+    const ownerTitle = role === 'admin' ? '管理员' : (this.config.identity?.ownerTitle || '主人');
     return `【${ownerTitle}介入】${name}(ID:${inbound.userId})在你回复期间补充：${t}`;
   }
 }

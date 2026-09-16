@@ -278,6 +278,13 @@ details[open] > summary { color: var(--text); }
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
 }
 .field-row.single { grid-template-columns: 1fr; }
+.field-row #cfg-admin-commands {
+  display: flex; flex-wrap: wrap; gap: 10px 16px; padding: 8px 0;
+}
+.field-row #cfg-admin-commands label {
+  flex-direction: row; align-items: center; gap: 6px;
+}
+.field-row #cfg-admin-commands input { width: 14px; height: 14px; }
 .field-row label, .field-row.single label {
   display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-dim); font-weight: 500;
 }
