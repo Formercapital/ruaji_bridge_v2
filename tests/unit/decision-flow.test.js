@@ -392,6 +392,42 @@ test('redirect 前缀用 ownerTitle 配置，昵称缺失时退 userId', async (
   assert.ok(redirectCalls[0].startsWith('【爸爸介入】10000001(ID:10000001)在你回复期间补充：'), `实际: ${redirectCalls[0]}`);
 });
 
+test('redirect 带引用消息时，前置引用摘要：模型能看清主人引用的上下文', async () => {
+  const sessions = new SessionStore();
+  const redirectCalls = [];
+  const flow = makeFlow();
+  flow.modelRouter = { redirect: async (key, text) => { redirectCalls.push(text); return { ok: true }; } };
+  flow.config = { ...flow.config, decision: { ...flow.config.decision, ownerRedirect: true } };
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '他说的是这个报错',
+    sender: { nickname: 'ruaji', card: '', displayName: 'ruaji' },
+    flags: { isOwner: true, hasQuote: true },
+    extensions: {
+      quote: {
+        summary: '[引用 狼三千 的消息: 那个报错怎么解决]',
+        sourceMessageId: '99999',
+      },
+    },
+  });
+  await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(redirectCalls.length, 1);
+  assert.equal(
+    redirectCalls[0],
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：[引用 狼三千 的消息: 那个报错怎么解决] 他说的是这个报错',
+  );
+});
+
 test('Golden fixture 的裁决结果符合预期', async () => {
   const logger = createTestLogger();
   const normalizer = new InboundNormalizer({ identity: CONFIG.identity, wake: CONFIG.wake, logger });
