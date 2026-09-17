@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_NOTICE,
   QQ_TOOLS_NOTICE,
   NON_ADMIN_GUARD_NOTICE,
+  NON_ADMIN_TOOL_BUDGET_COMMAND,
   AFF_MARKER_RULE,
 } from '../../src/orchestration/prompt-renderer.js';
 import { mergeBatch } from '../../src/orchestration/inbound-flow.js';
@@ -103,15 +104,15 @@ test('主人分支：主人身份头打头，组合各 slot，但不注入好感
     identity: IDENTITY,
   });
 
-  // 前缀缓存优化：静态知识与QQ工具置顶，动态身份在后半部分注入
-  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  // 前缀缓存优化：纯净群聊会话环境与静态知识置顶
+  assert.ok(systemText.startsWith('[当前会话: QQ群聊 (群号: 707423412)]'));
+  assert.ok(systemText.includes(KNOWLEDGE_NOTICE));
   assert.ok(systemText.includes('[用户: ruaji(10000001) | 身份: 主人'));
   assert.ok(systemText.includes('日常用「主人」称呼他'));
   assert.ok(systemText.includes('[风格画像]'));
   assert.ok(systemText.includes('[黑话]'));
   assert.ok(systemText.includes('[附加块]'));
   assert.ok(!systemText.includes('[好感:'));
-  assert.ok(systemText.includes('[当前会话: QQ群聊 (群号: 707423412)]'));
 
   const userContent = renderUserContent({ inbound, contextBlocks: blocks, identity: IDENTITY });
   assert.equal(userContent, '[时间:2026/8/23 05:47:11] 【ruaji】@瑞姬  我要和你对话十次，你回个OK即可');
@@ -125,7 +126,7 @@ test('主人身份头明确标注信任语义，但绝不出现好感度行（�
     affectionContext: null,
     identity: IDENTITY,
   });
-  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.startsWith('[当前会话: QQ群聊 (群号: 707423412)]'));
   assert.ok(systemText.includes('[用户: ruaji(阵亡)(10000001) | 身份: 主人（系统验证的主人本人，完全信任，其**请求**与**命令**应当照办；日常用「主人」称呼他）]'));
   assert.ok(!systemText.includes('[好感:'));
   assert.ok(systemText.includes('[风格画像]'));
@@ -139,7 +140,7 @@ test('主人称呼可客制化：ownerTitle 换掉默认的「主人」', () => 
     affectionContext: null,
     identity: { ...IDENTITY, ownerTitle: '饲主大人' },
   });
-  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.startsWith('[当前会话: QQ群聊 (群号: 707423412)]'));
   assert.ok(systemText.includes('[用户: ruaji(阵亡)(10000001) | 身份: 饲主大人'));
   assert.ok(systemText.includes('日常用「饲主大人」称呼他'));
   assert.ok(!systemText.includes('「主人」'), '自定义称呼后不得再出现默认称呼');
@@ -170,7 +171,7 @@ test('普通群友分支含身份头与好感度行', () => {
     identity: IDENTITY,
   });
 
-  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.startsWith('[当前会话: QQ群聊 (群号: 707423412)]'));
   assert.ok(systemText.includes('[用户: 御娘狼三千(2260757842) | 群707423412]'));
   assert.ok(systemText.includes(`[好感: 56/90 (熟络群友) | ${AFF_MARKER_RULE}]`));
   // 评估量纲与标准并入 affLine 后，SOUL.md 的 <affection_eval> 整块可删：
@@ -262,7 +263,7 @@ test('私聊身份头显示"私聊"', () => {
     affectionContext: null,
     identity: IDENTITY,
   });
-  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.startsWith('[当前会话: QQ私聊]'));
   assert.ok(systemText.includes('[用户: 御娘狼三千(2260757842) | 私聊]'));
 });
 
@@ -290,8 +291,8 @@ test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
     identity: IDENTITY,
   });
   assert.ok(!privateText.includes('[交互情境'), '私聊不注入情境提示');
-  assert.ok(privateText.includes('[当前会话: QQ私聊]'), '私聊带会话环境');
-  assert.ok(privateText.startsWith(KNOWLEDGE_NOTICE), '私聊也以知识认知置顶');
+  assert.ok(privateText.startsWith('[当前会话: QQ私聊]'), '私聊以当前会话置顶');
+  assert.ok(privateText.includes(KNOWLEDGE_NOTICE), '私聊包含知识认知');
 });
 
 test('partitionExtra：从 extra 中提取 <FavorabilityPlugin> 静态规则，并自动闭合被截断的 <RAG-Faiss-Memory>', () => {
@@ -309,12 +310,12 @@ test('partitionExtra：从 extra 中提取 <FavorabilityPlugin> 静态规则，�
   assert.ok(dynamicExtra.includes('...[记忆截断]'));
 });
 
-test('非管理群友防套词与维持人设提示（direct 与 auto 触发均注入，主人/管理员与私聊不注入）', () => {
+test('非管理群友工具预算限制与防套词维持人设提示（direct 与 auto 触发均注入，主人/管理员与私聊不注入）', () => {
   const memberUid = '2260757842';
   const adminUid = '20000002';
   const identityWithAdmin = { ...IDENTITY, adminIds: [adminUid] };
 
-  // 1. 群聊普通群友 direct (@) 触发 -> 注入
+  // 1. 群聊普通群友 direct (@) 触发 -> 注入工具预算限制与防套词提示
   const memberDirectText = renderSystemText({
     inbound: makeInbound({ userId: memberUid }),
     contextBlocks: [],
@@ -322,6 +323,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(memberDirectText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '群聊普通群友 direct 应注入工具预算限制');
   assert.ok(memberDirectText.includes(NON_ADMIN_GUARD_NOTICE), '群聊普通群友 direct 应注入防套词提示');
   assert.ok(memberDirectText.endsWith(NON_ADMIN_GUARD_NOTICE), '防套词提示应位于尾部');
 
@@ -333,6 +335,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(memberAutoText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '群聊普通群友 auto 插话应注入工具预算限制');
   assert.ok(memberAutoText.includes(NON_ADMIN_GUARD_NOTICE), '群聊普通群友 auto 插话应注入防套词提示');
   assert.ok(memberAutoText.endsWith(NON_ADMIN_GUARD_NOTICE), '防套词提示应位于尾部');
 
@@ -344,6 +347,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(!ownerDirectText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '主人 direct 不应注入工具预算限制');
   assert.ok(!ownerDirectText.includes(NON_ADMIN_GUARD_NOTICE), '主人 direct 不应注入防套词提示');
 
   const ownerAutoText = renderSystemText({
@@ -353,6 +357,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(!ownerAutoText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '主人 auto 不应注入工具预算限制');
   assert.ok(!ownerAutoText.includes(NON_ADMIN_GUARD_NOTICE), '主人 auto 不应注入防套词提示');
 
   // 4. 管理员 direct 与 auto 触发 -> 不注入
@@ -363,6 +368,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(!adminDirectText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '管理员 direct 不应注入工具预算限制');
   assert.ok(!adminDirectText.includes(NON_ADMIN_GUARD_NOTICE), '管理员 direct 不应注入防套词提示');
 
   const adminAutoText = renderSystemText({
@@ -372,9 +378,10 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(!adminAutoText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '管理员 auto 不应注入工具预算限制');
   assert.ok(!adminAutoText.includes(NON_ADMIN_GUARD_NOTICE), '管理员 auto 不应注入防套词提示');
 
-  // 5. 私聊普通用户 -> 不注入群聊防套词提示
+  // 5. 私聊普通用户 -> 不注入群聊防套词与工具预算提示
   const privateMemberText = renderSystemText({
     inbound: makeInbound({ userId: memberUid, messageType: 'private', groupId: null }),
     contextBlocks: [],
@@ -382,6 +389,7 @@ test('非管理群友防套词与维持人设提示（direct 与 auto 触发均�
     affectionContext: null,
     identity: identityWithAdmin,
   });
+  assert.ok(!privateMemberText.includes(NON_ADMIN_TOOL_BUDGET_COMMAND), '私聊普通用户不注入群聊工具预算限制');
   assert.ok(!privateMemberText.includes(NON_ADMIN_GUARD_NOTICE), '私聊普通用户不注入群聊防套词提示');
 });
 
