@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { FavourClient, resolveFavourLevel } from '../../src/storage/favour-client.js';
 import { PortrayalWorker } from '../../src/orchestration/portrayal-worker.js';
-import { renderSystemText } from '../../src/orchestration/prompt-renderer.js';
+import { renderSystemText, renderDynamicContext } from '../../src/orchestration/prompt-renderer.js';
 import { stripFavourTags } from '../../src/middleware/favour-tags.js';
 import { ReplyFlow } from '../../src/orchestration/reply-flow.js';
 import { EVENTS } from '../../src/contracts/events.js';
@@ -167,8 +167,8 @@ test('全链路追踪：run() 把最终注入的 prompt 补录进 trace', async 
   assert.ok(p, 'prompt 已补录');
   assert.equal(p.model, 'test-model');
   assert.equal(p.messageCount, 2, 'system + user 两条消息');
-  assert.ok(p.systemText.includes('昨天聊过猫猫'), 'context 块正文进入 systemText');
-  assert.ok(p.systemText.includes('群友甲'), '用户身份头进入 systemText');
+  assert.ok(p.userMessage.includes('昨天聊过猫猫'), 'context 块正文进入 userMessage');
+  assert.ok(p.userMessage.includes('群友甲'), '用户身份头进入 userMessage');
   assert.ok(p.userMessage.includes('你好'), '用户原话进入 userMessage');
   assert.equal(p.truncated, false);
 });
@@ -348,7 +348,7 @@ test('回复上下文：Favour 模式下桥接不注入旧刻度与旧评分指�
     text: '你好',
   };
 
-  const text = renderSystemText({
+  const dynamicContext = renderDynamicContext({
     inbound,
     contextBlocks: [],
     triggerType: 'at',
@@ -356,9 +356,9 @@ test('回复上下文：Favour 模式下桥接不注入旧刻度与旧评分指�
     identity: { ownerId: '3054039169', botName: '瑞姬' },
   });
 
-  assert.match(text, /话少、爱玩梗/, '画像仍由桥接注入');
-  assert.doesNotMatch(text, /好感: /, 'Favour 模式下不注入旧好感行');
-  assert.doesNotMatch(text, /\[AFF:/, '不注入旧评分标记规则');
+  assert.match(dynamicContext, /话少、爱玩梗/, '画像由动态上下文注入');
+  assert.doesNotMatch(dynamicContext, /好感: /, 'Favour 模式下不注入旧好感行');
+  assert.doesNotMatch(dynamicContext, /\[AFF:/, '不注入旧评分标记规则');
 });
 
 test('标签清洗：新标签族与旧 [AFF] 都不会泄漏到出站文本', () => {

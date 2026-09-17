@@ -149,6 +149,8 @@ export function createSandboxApi(deps) {
           inbound,
           contextBlocks: blocks,
           identity: config.identity,
+          triggerType: decision.triggerType,
+          affectionContext,
         });
         const messages = [];
         if (systemText && systemText.trim()) {

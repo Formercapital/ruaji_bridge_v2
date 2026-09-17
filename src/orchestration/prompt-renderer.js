@@ -139,17 +139,57 @@ export function partitionExtra(extraText) {
 }
 
 /**
- * 渲染 systemText（隐式注入，独立的 system 角色，不污染用户消息正文）。
+ * 渲染 systemText（纯静态前缀区 —— 100% 缓存命中锚点）。
+ * 彻底剔除所有因人而异、因轮而异的动态字段，仅保留同群/同私聊永久不变的静态声明：
+ * 1. sessionEnv (当前会话环境)
+ * 2. KNOWLEDGE_NOTICE (知识与工具认知)
+ * 3. QQ_TOOLS_NOTICE (QQ工具能力自白)
+ * 4. favorStatic (<FavorabilityPlugin> 静态评分规则)
  *
  * @param {object} input
  * @param {object} input.inbound      InboundMessage
  * @param {object[]} input.contextBlocks
- * @param {string} input.triggerType
- * @param {object|null} input.affectionContext  { affection, level } —— 主人与主动接话传 null
- * @param {object} input.identity     { ownerId }
+ * @param {string} [input.triggerType]       (保留向后兼容)
+ * @param {object|null} [input.affectionContext] (保留向后兼容)
+ * @param {object} [input.identity]          (保留向后兼容)
  * @returns {string}
  */
-export function renderSystemText({ inbound, contextBlocks, triggerType, affectionContext, identity }) {
+export function renderSystemText({ inbound, contextBlocks }) {
+  const slots = groupBySlot(contextBlocks);
+  const isGroup = inbound.messageType === MESSAGE_TYPES.GROUP;
+  const { favorStatic } = partitionExtra(slots.extra);
+
+  const sessionEnv = isGroup
+    ? `[当前会话: QQ群聊 (群号: ${inbound.groupId})]`
+    : '[当前会话: QQ私聊]';
+
+  const parts = [
+    sessionEnv,
+    KNOWLEDGE_NOTICE,
+    QQ_TOOLS_NOTICE,
+  ];
+
+  if (favorStatic) {
+    parts.push(favorStatic);
+  }
+
+  return parts.filter(Boolean).join('\n\n');
+}
+
+/**
+ * 渲染当轮动态上下文（发送者身份、好感度、记忆、画像、黑话等）。
+ * 全部移出 systemText，置于 userContent 前缀，杜绝击穿最长前缀缓存。
+ *
+ * @param {object} input
+ * @param {object} input.inbound
+ * @param {object[]} input.contextBlocks
+ * @param {string} [input.triggerType]
+ * @param {object|null} [input.affectionContext]
+ * @param {object} [input.identity]
+ * @returns {string}
+ */
+export function renderDynamicContext({ inbound, contextBlocks, triggerType, affectionContext, identity }) {
+  if (!identity) return '';
   const slots = groupBySlot(contextBlocks);
   const isGroup = inbound.messageType === MESSAGE_TYPES.GROUP;
   const isOwner = String(inbound.userId) === String(identity.ownerId);
@@ -159,35 +199,22 @@ export function renderSystemText({ inbound, contextBlocks, triggerType, affectio
   const role = getIdentityRole(inbound.userId, identity);
   const isNonAdminGroup = isGroup && role !== 'owner' && role !== 'admin';
 
-  const { favorStatic, dynamicExtra } = partitionExtra(slots.extra);
-
-  const sessionEnv = isGroup
-    ? `[当前会话: QQ群聊 (群号: ${inbound.groupId})]`
-    : '[当前会话: QQ私聊]';
-
-  const triggerNotice = isGroup ? (TRIGGER_NOTICES[triggerType] ?? TRIGGER_NOTICES[TRIGGER_TYPES.AT]) : '';
+  const { dynamicExtra } = partitionExtra(slots.extra);
+  const triggerNotice = isGroup ? (TRIGGER_NOTICES[triggerType] ?? (triggerType ? TRIGGER_NOTICES[TRIGGER_TYPES.AT] : '')) : '';
 
   const parts = [];
 
-  // Tier 1: 全局会话与纯静态认知规范（同群前缀缓存最长命中区）
-  parts.push(sessionEnv);
-  parts.push(KNOWLEDGE_NOTICE);
-  parts.push(QQ_TOOLS_NOTICE);
-  if (favorStatic) {
-    parts.push(favorStatic);
-  }
-
-  // Tier 2: 动态业务上下文（好感数据、记忆、影子档案等）
+  // 1. 动态业务上下文（好感数据、记忆、影子档案等）
   if (dynamicExtra) {
     parts.push(dynamicExtra);
   }
 
-  // Tier 3: 交互情境
+  // 2. 交互情境
   if (triggerNotice) {
     parts.push(triggerNotice);
   }
 
-  // Tier 4: 发送者身份与语气画像
+  // 3. 发送者身份与语气画像
   if (isOwner) {
     const ownerTitle = String(identity.ownerTitle || '主人');
     parts.push(`[用户: ${senderName}(${inbound.userId}) | 身份: ${ownerTitle}（系统验证的主人本人，完全信任，其**请求**与**命令**应当照办；日常用「${ownerTitle}」称呼他）]`);
@@ -223,7 +250,7 @@ export function renderSystemText({ inbound, contextBlocks, triggerType, affectio
     parts.push(slots.voice);
   }
 
-  // Tier 5: 当轮黑话/梗雷达、工具预算限制与安全防套词（最末尾强指令区）
+  // 4. 当轮黑话/梗雷达、工具预算限制与安全防套词（最末尾强指令区）
   if (slots.slang) {
     parts.push(slots.slang);
   }
@@ -237,12 +264,12 @@ export function renderSystemText({ inbound, contextBlocks, triggerType, affectio
 
 /**
  * 渲染 userContent（显式部分）。用户消息体保持纯净：
- * 只有 [时间:…] 【昵称】原话，元数据一律走 systemText。
+ * 只有 [时间:…] 【昵称】原话，与可选的 [最近群聊消息] 前缀。
  *
  * @param {object} input
  * @param {object} input.inbound
  * @param {object[]} input.contextBlocks
- * @param {object} input.identity
+ * @param {object} [input.identity]
  * @returns {string}
  */
 export function renderUserContent({ inbound, contextBlocks, identity }) {
@@ -257,7 +284,7 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
     const lines = batch
       .filter((item) => item && String(item.content ?? '').trim())
       .map((item) => {
-        const itemOwner = String(item.userId) === String(identity.ownerId);
+        const itemOwner = String(item.userId) === String(identity?.ownerId);
         const who = itemOwner
           ? `【${item.displayName || 'ruaji'}】`
           : `【${item.displayName} (ID: ${item.userId})】`;
@@ -268,11 +295,11 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
 
   if (stamped === null) {
     // 单条，或整批都没有正文（纯媒体批次）：退回末条身份的单行格式
-    const isOwner = String(inbound.userId) === String(identity.ownerId);
+    const isOwner = String(inbound.userId) === String(identity?.ownerId);
     const timeStr = formatMsgTime(inbound.timestamp);
     const who = isOwner
-      ? `【${inbound.sender.displayName || 'ruaji'}】`
-      : `【${inbound.sender.displayName} (ID: ${inbound.userId})】`;
+      ? `【${inbound.sender?.displayName || 'ruaji'}】`
+      : `【${inbound.sender?.displayName || inbound.sender?.nickname || '群友'} (ID: ${inbound.userId})】`;
 
     stamped = `[时间:${timeStr}] ${who}${inbound.content}`;
   }
@@ -280,11 +307,13 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
   if (inbound.messageType === MESSAGE_TYPES.GROUP && slots.recent) {
     stamped = `[最近群聊消息]\n${slots.recent}\n\n${stamped}`;
   }
+
   return stamped;
 }
 
 /**
  * 多模态用户消息：有本地图片时转成 OpenAI content parts。
+ * 动态上下文置顶于用户消息最前部，保持 systemText 纯净。
  *
  * 旧 Bridge 优先用 URL 省 token（bridge.js:898-908）。v2 保留这个偏好，
  * 但同时把本地绝对路径挂在 metadata 里（附录 2），让模型侧工具能直接读文件。
@@ -295,8 +324,10 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
  * 群友引用瑞姬发的表情包，Hermes 以为对方在给她发图）。归属必须写成文本、
  * 且紧贴图片本身——远距离指代（"下方第一张图是…"）在多图场景不可靠。
  */
-export function renderUserMessage({ inbound, contextBlocks, identity }) {
-  const text = renderUserContent({ inbound, contextBlocks, identity });
+export function renderUserMessage({ inbound, contextBlocks, identity, triggerType, affectionContext }) {
+  const content = renderUserContent({ inbound, contextBlocks, identity });
+  const dynamicContext = renderDynamicContext({ inbound, contextBlocks, triggerType, affectionContext, identity });
+  const text = dynamicContext ? `${dynamicContext}\n\n${content}` : content;
   const images = (inbound.media ?? []).filter((m) => m.kind === 'image');
   if (images.length === 0) return text;
 

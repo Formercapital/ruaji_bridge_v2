@@ -54,17 +54,15 @@ test('模型请求里 system 与 user 分离，用户消息体保持纯净', asy
   assert.equal(model.calls.length, 1);
   const [system, user] = model.calls[0].messages;
   assert.equal(system.role, 'system');
-  assert.ok(system.content.includes('[风格画像]'));
-  assert.ok(system.content.includes('[交互情境: 直接@呼唤]'));
+  assert.ok(!system.content.includes('[风格画像]'), 'system 保持纯净静态以维持缓存');
+  assert.ok(!system.content.includes('[交互情境: 直接@呼唤]'), '交互情境移至 user');
 
   assert.equal(user.role, 'user');
-  // 群聊里本地滑窗会把最近消息前置进来（旧 Bridge 同样行为），
-  // 但元数据一律走 systemText，不得污染用户消息体。
-  assert.ok(user.content.startsWith('[最近群聊消息]'), `实际: ${user.content.slice(0, 40)}`);
+  assert.ok(user.content.includes('[风格画像]'), '动态元数据进入 user 消息前缀');
+  assert.ok(user.content.includes('[交互情境: 直接@呼唤]'));
+  assert.ok(user.content.includes('[最近群聊消息]'));
   assert.ok(user.content.includes('[时间:'));
   assert.ok(user.content.includes('【ruaji(阵亡)】'));
-  assert.ok(!user.content.includes('[风格画像]'), '元数据不得污染用户消息体');
-  assert.ok(!user.content.includes('[交互情境'));
 });
 
 test('四个生命周期事件按顺序发布，且共享同一个 correlationId', async (t) => {
@@ -184,9 +182,9 @@ test('防抖只合并同一个人：两个人各自成轮，各自 @ 回自己�
   assert.ok(second.includes('【三²哒锅酱 (ID: 3382710099)】'), '第二轮触发文本只标后到那人的名');
   assert.ok(!second.includes('早晚吃撑圆球大肥鼠'), '第二轮触发文本不得夹带别人的话');
 
-  // 每一轮的身份头都是本人，不是"两个人的话挂在最后一人名下"
-  assert.ok(model.calls[0].messages[0].content.includes('[用户: qqqq819_01(2260757842)'));
-  assert.ok(model.calls[1].messages[0].content.includes('[用户: 三²哒锅酱(3382710099)'));
+  // 每一轮的身份头都是本人，不是"两个人的话挂在最后一人名下"（身份头已移至 user 消息前缀）
+  assert.ok(model.calls[0].messages[1].content.includes('[用户: qqqq819_01(2260757842)'));
+  assert.ok(model.calls[1].messages[1].content.includes('[用户: 三²哒锅酱(3382710099)'));
 
   // 首段自动 @ 也必须各回各的
   const mentions = container.sender.dryRunLog.map((d) => d.message);

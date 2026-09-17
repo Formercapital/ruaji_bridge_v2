@@ -74,7 +74,13 @@ export class ReplyFlow {
       affectionContext,
       identity: this.config.identity,
     });
-    const userMessage = renderUserMessage({ inbound, contextBlocks, identity: this.config.identity });
+    const userMessage = renderUserMessage({
+      inbound,
+      contextBlocks,
+      identity: this.config.identity,
+      triggerType,
+      affectionContext,
+    });
 
     const messages = [];
     if (systemText && systemText.trim()) messages.push({ role: 'system', content: systemText.trim() });

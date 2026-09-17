@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { CapabilityBus } from '../../src/core/capability-bus.js';
 import { ContextAggregator } from '../../src/core/context-aggregator.js';
 import { CAPABILITIES } from '../../src/contracts/capabilities.js';
-import { renderSystemText, renderUserContent } from '../../src/orchestration/prompt-renderer.js';
+import { renderSystemText, renderUserContent, renderUserMessage } from '../../src/orchestration/prompt-renderer.js';
 import { InboundNormalizer } from '../../src/adapters/napcat/inbound-normalizer.js';
 import { createTestLogger } from '../helpers.js';
 
@@ -97,7 +97,7 @@ test('LivingMemory 动态记忆与 GCP 群滑窗端到端注入验证', async ()
   assert.ok(sources.includes('self_learning'), '必须包含 self_learning 块');
   assert.ok(sources.includes('group_chat_plus'), '必须包含 group_chat_plus 块');
 
-  // 2. 验证 renderSystemText 包含 LivingMemory 记忆和黑话（普通群友视角）
+  // 2. 验证 renderSystemText 保持纯净静态，动态记忆与黑话进入 userMessage
   const systemText = renderSystemText({
     inbound,
     contextBlocks: blocks,
@@ -105,9 +105,19 @@ test('LivingMemory 动态记忆与 GCP 群滑窗端到端注入验证', async ()
     affectionContext: { affection: 50, level: '熟识' },
     identity: { ownerId: '1000000000' },
   });
-  assert.ok(systemText.includes('凤凰单丛乌龙茶'), 'systemText 必须包含 LivingMemory 动态召回的记忆');
-  assert.ok(systemText.includes('鼠蛋: 指1-3岁的鼠族幼崽'), 'systemText 必须包含黑话');
-  assert.ok(systemText.includes('[用户: ruaji(10000001) | 群1076958977]'), 'systemText 包含用户身份头');
+  assert.ok(!systemText.includes('凤凰单丛乌龙茶'), 'systemText 保持静态前缀，不包含动态记忆');
+  assert.ok(!systemText.includes('鼠蛋: 指1-3岁的鼠族幼崽'), 'systemText 不包含动态黑话');
+
+  const userMessage = renderUserMessage({
+    inbound,
+    contextBlocks: blocks,
+    triggerType: 'at',
+    affectionContext: { affection: 50, level: '熟识' },
+    identity: { ownerId: '1000000000' },
+  });
+  assert.ok(userMessage.includes('凤凰单丛乌龙茶'), 'userMessage 必须包含 LivingMemory 动态召回的记忆');
+  assert.ok(userMessage.includes('鼠蛋: 指1-3岁的鼠族幼崽'), 'userMessage 必须包含黑话');
+  assert.ok(userMessage.includes('[用户: ruaji(10000001) | 群1076958977]'), 'userMessage 包含用户身份头');
 
   // 3. 验证 renderUserContent 包含 GCP 群聊滑窗上下文
   const userContent = renderUserContent({
