@@ -82,7 +82,41 @@ class UnifiedContext:
         # 共享会话键的插件使用。属于框架语义补全，不含任何插件名。
         _identity = config.get("identity") or {}
         _owner_id = str(_identity.get("owner_id") or "")
-        config.setdefault("admins_id", [_owner_id] if _owner_id else [])
+        _admin_ids = list(_identity.get("admin_ids") or _identity.get("adminIds") or [])
+
+        # 尝试从上级 bridge.config.json 自动同步 adminIds 与 ownerId
+        try:
+            _bridge_config_path = os.path.abspath(
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "bridge.config.json")
+            )
+            if os.path.isfile(_bridge_config_path):
+                import json
+                with open(_bridge_config_path, "r", encoding="utf-8") as _bf:
+                    _bdata = json.load(_bf)
+                    _b_identity = _bdata.get("identity") or {}
+                    if not _owner_id:
+                        _owner_id = str(_b_identity.get("ownerId") or "")
+                    for _ba in (_b_identity.get("adminIds") or []):
+                        if _ba and str(_ba) not in [str(x) for x in _admin_ids]:
+                            _admin_ids.append(str(_ba))
+        except Exception as _e:
+            logger.warning("同步 bridge.config.json adminIds 失败: %s", _e)
+
+        admins_list = []
+        if _owner_id:
+            admins_list.append(_owner_id)
+        for _aid in _admin_ids:
+            _s_aid = str(_aid).strip()
+            if _s_aid and _s_aid not in admins_list:
+                admins_list.append(_s_aid)
+
+        current_admins = config.get("admins_id")
+        if isinstance(current_admins, list):
+            for _aid in admins_list:
+                if str(_aid) not in [str(x) for x in current_admins]:
+                    current_admins.append(str(_aid))
+        else:
+            config["admins_id"] = admins_list
         config.setdefault("data", data_root)
         config.setdefault("plugin.data_dir", data_root)
         config.setdefault("platform.id", "aiocqhttp")
