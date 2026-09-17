@@ -155,7 +155,7 @@ class MemoryRecall:
                     await self.message_utils.enforce_message_limit(session_id)
 
                 # 若 top_k <= 0，跳过记忆检索和注入，但上述清理和消息存储已执行
-                top_k = self.config_manager.get("recall_engine.top_k", 5)
+                top_k = self.config_manager.get("recall_engine.top_k", 3)
                 if top_k <= 0:
                     logger.info(
                         f"[{session_id}] top_k={top_k} <= 0，跳过记忆检索和注入"
@@ -239,7 +239,7 @@ class MemoryRecall:
 
                 recalled_memories = await self.memory_engine.search_memories(
                     query=query_for_search,
-                    k=self.config_manager.get("recall_engine.top_k", 5),
+                    k=self.config_manager.get("recall_engine.top_k", 3),
                     session_id=recall_session_id,
                     persona_id=recall_persona_id,
                 )
@@ -310,7 +310,7 @@ class MemoryRecall:
                         fake_messages = format_memories_for_fake_tool_call(
                             memory_list,
                             query=actual_query,
-                            k=self.config_manager.get("recall_engine.top_k", 5),
+                            k=self.config_manager.get("recall_engine.top_k", 3),
                             session_filtered=recall_session_id is not None,
                             persona_filtered=use_persona_filtering,
                         )

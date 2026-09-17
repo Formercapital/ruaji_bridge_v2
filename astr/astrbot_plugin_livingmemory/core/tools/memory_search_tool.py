@@ -52,7 +52,7 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
                 "k": {
                     "type": "integer",
                     "description": "Maximum number of memory items to return for one recall. Keep this small unless more evidence is needed.",
-                    "default": 5,
+                    "default": 3,
                 },
                 "include_source": {
                     "type": "boolean",
@@ -68,7 +68,7 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
         self,
         context: ContextWrapper[AstrAgentContext],
         query: str,
-        k: int = 5,
+        k: int = 3,
         include_source: bool = False,
     ) -> ToolExecResult:
         """执行长期记忆回忆。"""
@@ -120,7 +120,7 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
             recall_session_id = resolve_memory_scope(self.config_manager, event)
             recall_persona_id = persona_id if use_persona_filtering else None
 
-            default_k = int(self.config_manager.get("recall_engine.top_k", 5))
+            default_k = int(self.config_manager.get("recall_engine.top_k", 3))
             max_k = int(self.config_manager.get("recall_engine.max_k", 10))
             requested_k = default_k if k is None else k
             try:

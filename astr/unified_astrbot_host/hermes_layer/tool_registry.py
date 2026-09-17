@@ -246,8 +246,8 @@ class ToolRegistry:
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "返回条数上限，1-20，默认 5。",
-                            "default": 5,
+                            "description": "返回条数上限，1-20，默认 3。",
+                            "default": 3,
                         },
                     },
                     "required": ["query"],
@@ -382,7 +382,7 @@ class ToolRegistry:
         self,
         query: str,
         target_user_id: str = "",
-        limit: int = 5,
+        limit: int = 3,
     ) -> dict[str, Any]:
         cleaned = str(query or "").strip()
         if not cleaned:
@@ -398,7 +398,7 @@ class ToolRegistry:
                 "count": 0,
             }
 
-        k = max(1, min(_as_int(limit, 5), 20))
+        k = max(1, min(_as_int(limit, 3), 20))
         target = str(target_user_id or "").strip()
         search_query = f"{cleaned} {target}".strip() if target else cleaned
         scope = self._scope()
@@ -719,7 +719,7 @@ def _as_float(value: Any, default: float) -> float:
         return default
 
 
-def _parse_raw_contexts(raw: Any, limit: int = 5) -> list[str]:
+def _parse_raw_contexts(raw: Any, limit: int = 3) -> list[str]:
     if isinstance(raw, list):
         items = raw
     elif isinstance(raw, str) and raw.strip():
