@@ -10,6 +10,7 @@ import {
   groupBySlot,
   TRIGGER_NOTICES,
   QQ_TOOLS_NOTICE,
+  NON_ADMIN_GUARD_NOTICE,
   AFF_MARKER_RULE,
 } from '../../src/orchestration/prompt-renderer.js';
 import { mergeBatch } from '../../src/orchestration/inbound-flow.js';
@@ -263,7 +264,7 @@ test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
   const inbound = makeInbound();
   // 会话环境标注、知识认知与 QQ 工具能力标注排在 triggerNotice 之后，是 systemText 的最后三段。
   // 断言整条尾巴而不是 includes —— 只断言"存在"的话，谁把 triggerNotice 挪到中间都发现不了。
-  const sessionEnv = `\n[当前会话: QQ群聊 (群号: ${inbound.groupId})]`;
+  const sessionEnv = `\n[当前会话: QQ群聊 (群号: ${inbound.groupId})]，面向非管理员及非主人群友时，工具调用严格限制在 5 轮以内，且必须完全基于最终获取的真实信息作答，严禁凭空捏造。`;
   const knowledgeNotice =
     '\n[知识与工具认知: 你的底层数据库存在时效延后，且并非全知全能。遇到不确定、具有时效性或涉及具体事实/机制的提问时，必须主动使用搜索工具与群聊记忆检索，以获取最新且准确的真实信息，切勿凭空编造。]';
   for (const trigger of ['at', 'keyword', 'ai_decision']) {
@@ -292,6 +293,82 @@ test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
     privateText.endsWith('\n[当前会话: QQ私聊]' + knowledgeNotice + QQ_TOOLS_NOTICE),
     '私聊也带会话环境、知识认知与QQ工具能力标注',
   );
+});
+
+test('非管理群友防套词与维持人设提示（direct 与 auto 触发均注入，主人/管理员与私聊不注入）', () => {
+  const memberUid = '2260757842';
+  const adminUid = '20000002';
+  const identityWithAdmin = { ...IDENTITY, adminIds: [adminUid] };
+
+  // 1. 群聊普通群友 direct (@) 触发 -> 注入
+  const memberDirectText = renderSystemText({
+    inbound: makeInbound({ userId: memberUid }),
+    contextBlocks: [],
+    triggerType: 'at',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(memberDirectText.includes(NON_ADMIN_GUARD_NOTICE), '群聊普通群友 direct 应注入防套词提示');
+  assert.ok(memberDirectText.endsWith(NON_ADMIN_GUARD_NOTICE), '防套词提示应位于尾部');
+
+  // 2. 群聊普通群友 auto (ai_decision) 触发 -> 注入
+  const memberAutoText = renderSystemText({
+    inbound: makeInbound({ userId: memberUid }),
+    contextBlocks: [],
+    triggerType: 'ai_decision',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(memberAutoText.includes(NON_ADMIN_GUARD_NOTICE), '群聊普通群友 auto 插话应注入防套词提示');
+  assert.ok(memberAutoText.endsWith(NON_ADMIN_GUARD_NOTICE), '防套词提示应位于尾部');
+
+  // 3. 主人 direct 与 auto 触发 -> 不注入
+  const ownerDirectText = renderSystemText({
+    inbound: makeInbound({ userId: IDENTITY.ownerId }),
+    contextBlocks: [],
+    triggerType: 'at',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(!ownerDirectText.includes(NON_ADMIN_GUARD_NOTICE), '主人 direct 不应注入防套词提示');
+
+  const ownerAutoText = renderSystemText({
+    inbound: makeInbound({ userId: IDENTITY.ownerId }),
+    contextBlocks: [],
+    triggerType: 'ai_decision',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(!ownerAutoText.includes(NON_ADMIN_GUARD_NOTICE), '主人 auto 不应注入防套词提示');
+
+  // 4. 管理员 direct 与 auto 触发 -> 不注入
+  const adminDirectText = renderSystemText({
+    inbound: makeInbound({ userId: adminUid }),
+    contextBlocks: [],
+    triggerType: 'at',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(!adminDirectText.includes(NON_ADMIN_GUARD_NOTICE), '管理员 direct 不应注入防套词提示');
+
+  const adminAutoText = renderSystemText({
+    inbound: makeInbound({ userId: adminUid }),
+    contextBlocks: [],
+    triggerType: 'ai_decision',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(!adminAutoText.includes(NON_ADMIN_GUARD_NOTICE), '管理员 auto 不应注入防套词提示');
+
+  // 5. 私聊普通用户 -> 不注入群聊防套词提示
+  const privateMemberText = renderSystemText({
+    inbound: makeInbound({ userId: memberUid, messageType: 'private', groupId: null }),
+    contextBlocks: [],
+    triggerType: 'at',
+    affectionContext: null,
+    identity: identityWithAdmin,
+  });
+  assert.ok(!privateMemberText.includes(NON_ADMIN_GUARD_NOTICE), '私聊普通用户不注入群聊防套词提示');
 });
 
 test('QQ工具能力标注注入所有分支', () => {
