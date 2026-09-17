@@ -287,6 +287,8 @@ export function createContainer(config, overrides = {}) {
     traceCollector,
   });
   const decisionFlow = new DecisionFlow({
+    fetchImpl,
+    affectionStore,
     capabilityBus,
     sessionStore,
     normalizer,

@@ -61,6 +61,7 @@ from astrbot.core.message.message_event_result import MessageEventResult, Result
 from astrbot.core.utils.session_waiter import feed as feed_waiters
 from astrbot.core.star.star_handler import EventType, star_handlers_registry
 from hermes_layer.context_builder import ContextBuilder, build_event
+from hermes_layer.reply_preflight import check_reply_preflight
 from hermes_layer.contracts import InboundMessage
 from hermes_layer.decision import DecisionEngine
 from hermes_layer.dispatch import (
@@ -155,6 +156,7 @@ class HostServer:
                 web.post("/api/v1/events", self.handle_events),
                 web.post("/api/v1/decision", self.handle_decision),
                 web.post("/api/v1/context/enrich", self.handle_enrich),
+                web.post("/api/v1/reply/preflight", self.handle_reply_preflight),
                 web.post("/api/v1/result/decorate", self.handle_decorate),
                 web.get("/api/v1/tools", self.handle_tools),
                 web.post("/api/v1/tools/call", self.handle_tool_call),
@@ -184,6 +186,7 @@ class HostServer:
                     "POST /api/v1/events",
                     "POST /api/v1/decision",
                     "POST /api/v1/context/enrich",
+                    "POST /api/v1/reply/preflight",
                     "POST /api/v1/result/decorate",
                     "GET  /api/v1/tools",
                     "POST /api/v1/tools/call",
@@ -428,6 +431,15 @@ class HostServer:
         return _json(payload)
 
     # ---------- enrich ----------
+
+    async def handle_reply_preflight(self, request: web.Request) -> web.Response:
+        body = await _read_json(request)
+        message = InboundMessage.from_payload(body)
+        if not message.user_id or message.trigger_type == "ai_decision":
+            return _json({"ok": False, "allowed": False, "reason": "invalid_intervention"})
+        event = build_event(message, self_id=str((self.unified.config.get("identity") or {}).get("robot_id") or ""))
+        required = ("favour_ultra",) if body.get("requireFavour") is True else ()
+        return _json(await check_reply_preflight(self.unified, event, required))
 
     async def handle_enrich(self, request: web.Request) -> web.Response:
         body = await _read_json(request)

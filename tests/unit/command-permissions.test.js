@@ -100,14 +100,14 @@ test('normalization preserves administrator identity without owner exemptions', 
   assert.equal(decisionFlow._isRateLimited(inbound), true);
 });
 
-test('admin preempts through normal pipeline, never redirects past gates, and loses privilege on removal', async () => {
+test('admin redirect failure falls back to preemption and loses privilege on removal', async () => {
   const config = { identity: { ...identity }, decision: { ownerRedirect: true, rateLimit: { maxReplies: 1, windowMs: 300000 } } };
   const sessions = new SessionStore();
   const flow = new DecisionFlow({ config, sessionStore: sessions, logger });
   const inbound = message('请补充细节');
   const controller = new AbortController();
   sessions.beginExecution(inbound.executionKey, { controller, sessionKey: 'active-key' });
-  flow.modelRouter = { redirect: async () => assert.fail('admin must not skip context gates via redirect') };
+  flow.modelRouter = { redirect: async () => ({ ok: false }) };
   assert.match(flow._redirectTextOf(inbound), /【管理员介入】/);
   config.identity.adminIds = [];
   assert.equal((await flow.arbitrateConcurrency(inbound)).action, 'queue');

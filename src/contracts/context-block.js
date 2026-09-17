@@ -71,7 +71,9 @@ export function coerceContextBlocks(raw, defaults = {}) {
       ...(item.detail?.slot ? { slot: item.detail.slot } : {}),
       ...(item.detail?.intercepted ? { intercepted: true, reply: item.detail.reply ?? null } : {}),
     };
-    if (!text.trim()) continue;
+    // A silent stop is control data, even when the plugin contributes no text.
+    // Aggregation reads this marker before discarding empty prompt blocks.
+    if (!text.trim() && !metadata.intercepted) continue;
     const dedupeKey =
       item.dedupeKey ??
       item.detail?.dedupeKey ??

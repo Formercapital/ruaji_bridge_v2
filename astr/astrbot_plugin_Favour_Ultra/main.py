@@ -2012,14 +2012,24 @@ class FavourManagerTool(Star):
         except Exception:
             pass
 
+    def check_reply_gate(self, event):
+        from .reply_gate import check_reply_gate
+        return check_reply_gate(self, event)
+
     @filter.on_llm_request()
     async def inject_favour_prompt(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        # 桥接主动插话轮（trigger_type=ai_decision）：群友并未与 bot 互动，
-        # 不注入好感度规则与数据——与旧好感链路的主动接话豁免对齐（vendor patch 11）
-        if event.get_extra("_bridge_trigger_type") == "ai_decision":
-            logger.debug("[Prompt注入] 桥接主动插话轮，跳过好感度注入。")
-            return
+        # auto 免于好感度注入/结算，但不能绕过黑名单或冷暴力门禁。
+        is_auto = event.get_extra("_bridge_trigger_type") == "ai_decision"
         try:
+            gate = self.check_reply_gate(event)
+            if not gate["allowed"]:
+                if not is_auto and gate.get("reply"):
+                    await event.send(event.plain_result(gate["reply"]))
+                event.stop_event()
+                return
+            if is_auto:
+                return
+
             session_id = self._get_session_id(event)
             user_id = str(event.get_sender_id())
 
@@ -2047,30 +2057,13 @@ class FavourManagerTool(Star):
                     logger.debug(f"[Prompt注入] 会话 {session_id} 在黑名单中，跳过。")
                     return
 
-            # 检查自动拉黑
-            blacklist_key = f"{session_id}:{user_id}" if not self._is_shared_session(session_id) else user_id
-            if blacklist_key in self.auto_blacklisted:
-                logger.debug(f"[Prompt注入] 用户 {user_id} 已被自动拉黑，拦截消息。")
-                event.stop_event()
-                return
-
-            # 检查冷暴力
+            # 过期状态清理仅属于普通注入，预检不写状态。
             if self.enable_cold_violence:
                 cv_key = self._get_cold_violence_key(user_id, session_id)
-                if cv_key in self.cold_violence_users:
-                    expiry = self.cold_violence_users[cv_key]
-                    if datetime.now() < expiry:
-                        remaining = expiry - datetime.now()
-                        time_str = f"{int(remaining.total_seconds() // 60)}分"
-                        logger.debug(f"[Prompt注入] 用户 {user_id} 处于冷暴力状态（剩余 {time_str}），拦截消息并回复。")
-                        reply = self.cold_violence_replies["on_message"].replace("{time_str}", time_str)
-                        await event.send(event.plain_result(reply))
-                        event.stop_event()
-                        return
-                    else:
-                        del self.cold_violence_users[cv_key]
+                expiry = self.cold_violence_users.get(cv_key)
+                if expiry and datetime.now() >= expiry:
+                    del self.cold_violence_users[cv_key]
 
-            # 获取数据
             record = await self.db_manager.get_favour(user_id, session_id)
             if record:
                 current_favour = record.favour

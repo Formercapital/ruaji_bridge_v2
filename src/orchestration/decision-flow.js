@@ -52,6 +52,8 @@ export class DecisionFlow {
     this.rateLimitUsers = new Set((opts.config.identity.rateLimitUsers ?? []).map(String));
     /** @see arbitrateConcurrency 的 redirect 分支 */
     this.modelRouter = opts.modelRouter ?? null;
+    this.fetch = opts.fetchImpl ?? fetch;
+    this.affection = opts.affectionStore ?? null;
   }
 
   /**
@@ -206,9 +208,19 @@ export class DecisionFlow {
     const role = getIdentityRole(inbound.userId, this.config.identity);
     const isAuto = decision?.route === ROUTES.AUTO || inbound.extensions?.proactive === true;
     if (!isAuto && canIntervene(role)) {
-      // Admin intervention must enter the normal context/interception pipeline.
-      // Redirect skips that pipeline and is therefore reserved for the owner.
-      if (role === 'owner' && this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
+      const interventionActive = this.sessions.getActive(key);
+      if (role === 'admin') {
+        const active = this.sessions.getActive(key);
+        const gate = await this._checkIntervention(inbound, decision);
+        if (!gate.allowed || getIdentityRole(inbound.userId, this.config.identity) !== 'admin') {
+          this.log.info('管理员介入未通过门禁', { userId: inbound.userId, reason: gate.reason });
+          return { action: 'drop' };
+        }
+        // Awaiting the host must not grant permission to interrupt a different run.
+        if (!this.sessions.isBusy(key)) return { action: 'start' };
+        if (this.sessions.getActive(key) !== active) return { action: 'queue' };
+      }
+      if (this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
         const active = this.sessions.getActive(key);
         const result = await this.modelRouter.redirect(
           active?.sessionKey ?? key,
@@ -227,6 +239,11 @@ export class DecisionFlow {
           code: result.code ?? null,
           detail: result.detail ?? null,
         });
+      }
+      if (role === 'admin') {
+        if (getIdentityRole(inbound.userId, this.config.identity) !== 'admin') return { action: 'drop' };
+        if (!this.sessions.isBusy(key)) return { action: 'start' };
+        if (this.sessions.getActive(key) !== interventionActive) return { action: 'queue' };
       }
       const preempted = this.sessions.preempt(
         key,
@@ -259,6 +276,33 @@ export class DecisionFlow {
       userId: inbound.userId,
     });
     return { action: 'queue' };
+  }
+
+  async _checkIntervention(inbound, decision) {
+    if (!this.config.favourUltraEnabled && this.affection?.isColdViolent(inbound.userId)) {
+      return { allowed: false, reason: 'cold_violence' };
+    }
+    const baseUrl = this.config.unifiedHost?.baseUrl;
+    if (!baseUrl) return { allowed: !this.config.favourUltraEnabled, reason: 'host_unavailable' };
+    try {
+      const res = await this.fetch(`${baseUrl.replace(/\/$/, '')}/api/v1/reply/preflight`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: inbound.userId, groupId: inbound.groupId, messageId: inbound.messageId,
+          text: inbound.text, content: inbound.content, selfId: inbound.selfId,
+          displayName: inbound.sender?.displayName, isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+          atBot: inbound.flags.isAtBot, triggerType: decision?.triggerType || 'at',
+          requireFavour: this.config.favourUltraEnabled === true,
+        }),
+        signal: AbortSignal.timeout(2500),
+      });
+      const gate = await res.json();
+      return { allowed: res.ok && gate?.ok === true && gate?.allowed === true, reason: gate?.reason || 'preflight' };
+    } catch (err) {
+      this.log.warn('管理员介入门禁检查失败', { error: err.message });
+      return { allowed: false, reason: 'preflight_failed' };
+    }
   }
 
   /**
