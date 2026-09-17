@@ -8,7 +8,9 @@ import {
   renderLocalMediaHint,
   formatMsgTime,
   groupBySlot,
+  partitionExtra,
   TRIGGER_NOTICES,
+  KNOWLEDGE_NOTICE,
   QQ_TOOLS_NOTICE,
   NON_ADMIN_GUARD_NOTICE,
   AFF_MARKER_RULE,
@@ -101,9 +103,9 @@ test('主人分支：主人身份头打头，组合各 slot，但不注入好感
     identity: IDENTITY,
   });
 
-  // v2 有意偏离旧 Bridge：主人分支注入主人身份头（系统角色认证，模型不再靠
-  // userContent 的短格式昵称猜"这是主人"，反控制人设也就不会把主人指令当攻击拒掉）
-  assert.ok(systemText.startsWith('[用户: ruaji(10000001) | 身份: 主人'));
+  // 前缀缓存优化：静态知识与QQ工具置顶，动态身份在后半部分注入
+  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.includes('[用户: ruaji(10000001) | 身份: 主人'));
   assert.ok(systemText.includes('日常用「主人」称呼他'));
   assert.ok(systemText.includes('[风格画像]'));
   assert.ok(systemText.includes('[黑话]'));
@@ -123,7 +125,8 @@ test('主人身份头明确标注信任语义，但绝不出现好感度行（�
     affectionContext: null,
     identity: IDENTITY,
   });
-  assert.ok(systemText.startsWith('[用户: ruaji(阵亡)(10000001) | 身份: 主人（系统验证的主人本人，完全信任，其**请求**与**命令**应当照办；日常用「主人」称呼他）]'));
+  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.includes('[用户: ruaji(阵亡)(10000001) | 身份: 主人（系统验证的主人本人，完全信任，其**请求**与**命令**应当照办；日常用「主人」称呼他）]'));
   assert.ok(!systemText.includes('[好感:'));
   assert.ok(systemText.includes('[风格画像]'));
 });
@@ -136,7 +139,8 @@ test('主人称呼可客制化：ownerTitle 换掉默认的「主人」', () => 
     affectionContext: null,
     identity: { ...IDENTITY, ownerTitle: '饲主大人' },
   });
-  assert.ok(systemText.startsWith('[用户: ruaji(阵亡)(10000001) | 身份: 饲主大人'));
+  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.includes('[用户: ruaji(阵亡)(10000001) | 身份: 饲主大人'));
   assert.ok(systemText.includes('日常用「饲主大人」称呼他'));
   assert.ok(!systemText.includes('「主人」'), '自定义称呼后不得再出现默认称呼');
 
@@ -166,7 +170,8 @@ test('普通群友分支含身份头与好感度行', () => {
     identity: IDENTITY,
   });
 
-  assert.ok(systemText.startsWith('[用户: 御娘狼三千(2260757842) | 群707423412]'));
+  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.includes('[用户: 御娘狼三千(2260757842) | 群707423412]'));
   assert.ok(systemText.includes(`[好感: 56/90 (熟络群友) | ${AFF_MARKER_RULE}]`));
   // 评估量纲与标准并入 affLine 后，SOUL.md 的 <affection_eval> 整块可删：
   // 这里守住量纲措辞不被顺手砍掉。
@@ -257,16 +262,12 @@ test('私聊身份头显示"私聊"', () => {
     affectionContext: null,
     identity: IDENTITY,
   });
-  assert.ok(systemText.startsWith('[用户: 御娘狼三千(2260757842) | 私聊]'));
+  assert.ok(systemText.startsWith(KNOWLEDGE_NOTICE));
+  assert.ok(systemText.includes('[用户: 御娘狼三千(2260757842) | 私聊]'));
 });
 
 test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
   const inbound = makeInbound();
-  // 会话环境标注、知识认知与 QQ 工具能力标注排在 triggerNotice 之后，是 systemText 的最后三段。
-  // 断言整条尾巴而不是 includes —— 只断言"存在"的话，谁把 triggerNotice 挪到中间都发现不了。
-  const sessionEnv = `\n[当前会话: QQ群聊 (群号: ${inbound.groupId})]，面向非管理员及非主人群友时，工具调用严格限制在 5 轮以内，且必须完全基于最终获取的真实信息作答，严禁凭空捏造。`;
-  const knowledgeNotice =
-    '\n[知识与工具认知: 你的底层数据库存在时效延后，且并非全知全能。遇到不确定、具有时效性或涉及具体事实/机制的提问时，必须主动使用搜索工具与群聊记忆检索，以获取最新且准确的真实信息，切勿凭空编造。]';
   for (const trigger of ['at', 'keyword', 'ai_decision']) {
     const systemText = renderSystemText({
       inbound,
@@ -276,8 +277,8 @@ test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
       identity: IDENTITY,
     });
     assert.ok(
-      systemText.endsWith(TRIGGER_NOTICES[trigger] + sessionEnv + knowledgeNotice + QQ_TOOLS_NOTICE),
-      `${trigger} 的情境提示应当逐字保留，且紧跟在会话环境标注、知识认知与QQ工具能力标注之前`,
+      systemText.includes(TRIGGER_NOTICES[trigger]),
+      `${trigger} 的情境提示应当逐字保留`,
     );
   }
 
@@ -289,10 +290,23 @@ test('三段 triggerNotice 逐字保留，且只在群聊注入', () => {
     identity: IDENTITY,
   });
   assert.ok(!privateText.includes('[交互情境'), '私聊不注入情境提示');
-  assert.ok(
-    privateText.endsWith('\n[当前会话: QQ私聊]' + knowledgeNotice + QQ_TOOLS_NOTICE),
-    '私聊也带会话环境、知识认知与QQ工具能力标注',
-  );
+  assert.ok(privateText.includes('[当前会话: QQ私聊]'), '私聊带会话环境');
+  assert.ok(privateText.startsWith(KNOWLEDGE_NOTICE), '私聊也以知识认知置顶');
+});
+
+test('partitionExtra：从 extra 中提取 <FavorabilityPlugin> 静态规则，并自动闭合被截断的 <RAG-Faiss-Memory>', () => {
+  const extraText = [
+    '<FavorabilityPlugin><Rules>一律纯文本</Rules></FavorabilityPlugin>',
+    '<FavourContext>好感1000</FavourContext>',
+    '<RAG-Faiss-Memory>\n记忆 #1: 环世界优化\n记忆 #2: 老滚5', // 缺少闭合标签
+  ].join('\n\n');
+
+  const { favorStatic, dynamicExtra } = partitionExtra(extraText);
+  assert.ok(favorStatic.includes('<FavorabilityPlugin>'));
+  assert.ok(!dynamicExtra.includes('<FavorabilityPlugin>'));
+  assert.ok(dynamicExtra.includes('<FavourContext>好感1000</FavourContext>'));
+  assert.ok(dynamicExtra.includes('</RAG-Faiss-Memory>'), '未闭合的记忆标签应被自动补齐');
+  assert.ok(dynamicExtra.includes('...[记忆截断]'));
 });
 
 test('非管理群友防套词与维持人设提示（direct 与 auto 触发均注入，主人/管理员与私聊不注入）', () => {
