@@ -14,6 +14,7 @@ import {
   toFileUri,
   renderAtMention,
   sanitizeMentionName,
+  formatCardSummary,
 } from '../../src/adapters/napcat/cq.js';
 import { loadFixture } from '../helpers.js';
 
@@ -169,4 +170,67 @@ test('segmentsToText 用 renderAtMention 渲染含 name 的 at 段', () => {
     { type: 'text', data: { text: ' 帮我看看' } },
   ]);
   assert.equal(text, '@三锅 帮我看看');
+});
+
+// ── 富媒体卡片摘要与提取测试 ──────────────────
+
+test('formatCardSummary 正确解析 JSON/XML/Share/Miniapp 卡片', () => {
+  // 1. JSON 小程序卡片（带 prompt）
+  const jsonSegPrompt = {
+    data: JSON.stringify({
+      app: 'com.tencent.miniapp_01',
+      prompt: '[QQ小程序]AI 亲自玩环世界 EP.2 | 它烧了 23 亿 token，把小人玩死了',
+    }),
+  };
+  assert.equal(
+    formatCardSummary('json', jsonSegPrompt),
+    '[QQ小程序]AI 亲自玩环世界 EP.2 | 它烧了 23 亿 token，把小人玩死了',
+  );
+
+  // 2. JSON 卡片无 prompt 但带 meta detail
+  const jsonSegMeta = {
+    data: {
+      meta: {
+        detail_1: {
+          title: '哔哩哔哩',
+          desc: '【户山香澄】“梦核的小曲~”',
+        },
+      },
+    },
+  };
+  assert.equal(
+    formatCardSummary('json', jsonSegMeta),
+    '[卡片: 哔哩哔哩 - 【户山香澄】“梦核的小曲~”]',
+  );
+
+  // 3. XML 卡片
+  assert.equal(
+    formatCardSummary('xml', { data: '<msg brief="[分享] 百度一下"><title>百度</title></msg>' }),
+    '[分享] 百度一下',
+  );
+
+  // 4. Share 卡片
+  assert.equal(
+    formatCardSummary('share', { title: 'RimWorld 模组推荐', content: '好玩的鼠族MOD' }),
+    '[分享: RimWorld 模组推荐 - 好玩的鼠族MOD]',
+  );
+});
+
+test('segmentsToText 正确提取 json 卡片文本', () => {
+  const text = segmentsToText([
+    {
+      type: 'json',
+      data: {
+        data: JSON.stringify({
+          prompt: '[QQ小程序]AI 亲自玩环世界 EP.2',
+        }),
+      },
+    },
+  ]);
+  assert.equal(text, '[QQ小程序]AI 亲自玩环世界 EP.2');
+});
+
+test('annotateCqCodes 将 [CQ:json] 转换为可读摘要', () => {
+  const raw = '[CQ:json,data={"prompt":"&#91;QQ小程序&#93;AI 亲自玩环世界 EP.2"}]';
+  assert.equal(annotateCqCodes(raw), '[QQ小程序]AI 亲自玩环世界 EP.2');
 });

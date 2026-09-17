@@ -66,13 +66,20 @@ export function parseCqMessage(rawMessage) {
 /** ",k=v,k2=v2" -> { k: v, k2: v2 }。值里可能含 '='，只按第一个 '=' 切。 */
 export function parseCqParams(paramString) {
   const out = {};
+  let lastKey = null;
   for (const pair of String(paramString ?? '').split(',')) {
     if (!pair) continue;
     const eq = pair.indexOf('=');
-    if (eq === -1) continue;
+    if (eq === -1) {
+      if (lastKey) {
+        out[lastKey] += `,${unescapeCq(pair)}`;
+      }
+      continue;
+    }
     const key = pair.slice(0, eq).trim();
     if (!key) continue;
     out[key] = unescapeCq(pair.slice(eq + 1));
+    lastKey = key;
   }
   return out;
 }
@@ -144,15 +151,159 @@ export function stripCqCodes(rawMessage) {
  */
 export const AT_CQ_SOURCE = String.raw`\[CQ:at((?:,[^,\]]*)*)\]`;
 
+/**
+ * 从 JSON/XML/Share/Forward/Miniapp 等富媒体卡片中提取人类和模型可读的摘要文本。
+ * 解决小程序、B站视频、分享卡片等被引用或直接发送时文本丢失的问题。
+ */
+export function formatCardSummary(type, data = {}) {
+  const normType = String(type ?? '').toLowerCase();
+
+  if (normType === 'json') {
+    let payload = data?.data ?? data;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        // 容错：可能字符串经过部分转义或不完整
+      }
+    }
+    if (payload && typeof payload === 'object') {
+      const prompt = payload.prompt ? String(payload.prompt).trim() : '';
+      let detailTitle = '';
+      let detailDesc = '';
+      if (payload.meta && typeof payload.meta === 'object') {
+        for (const val of Object.values(payload.meta)) {
+          if (val && typeof val === 'object') {
+            if (val.title && !detailTitle) detailTitle = String(val.title).trim();
+            if (val.desc && !detailDesc) detailDesc = String(val.desc).trim();
+          }
+        }
+      }
+      if (prompt) {
+        // 如果 prompt 只是很短的类别标签（如 "[QQ小程序]"），而 detail 有标题/描述，则合并
+        if (/^\[[^\]]+\]$/.test(prompt) && (detailTitle || detailDesc)) {
+          const detail = [detailTitle, detailDesc].filter(Boolean).join(' - ');
+          return `${prompt}${detail}`;
+        }
+        return prompt.startsWith('[') ? prompt : `[卡片: ${prompt}]`;
+      }
+      if (detailTitle || detailDesc) {
+        const detail = [detailTitle, detailDesc].filter(Boolean).join(' - ');
+        return `[卡片: ${detail}]`;
+      }
+    }
+    return '[卡片消息]';
+  }
+
+  if (normType === 'xml') {
+    const raw = typeof data?.data === 'string' ? data.data : (typeof data === 'string' ? data : '');
+    const briefMatch = raw.match(/brief="([^"]+)"/i);
+    if (briefMatch && briefMatch[1]) {
+      const brief = unescapeCq(briefMatch[1]).trim();
+      return brief.startsWith('[') ? brief : `[卡片: ${brief}]`;
+    }
+    const titleMatch = raw.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/i);
+    if (titleMatch && titleMatch[1]) {
+      const title = unescapeCq(titleMatch[1]).trim();
+      return `[卡片: ${title}]`;
+    }
+    return '[XML卡片]';
+  }
+
+  if (normType === 'share') {
+    const title = data.title ? String(data.title).trim() : '';
+    const content = data.content ? String(data.content).trim() : '';
+    const desc = [title, content].filter(Boolean).join(' - ');
+    return desc ? `[分享: ${desc}]` : '[分享链接]';
+  }
+
+  if (normType === 'forward') {
+    return '[聊天记录]';
+  }
+
+  if (normType === 'miniapp') {
+    const title = data.title || data.text || '';
+    return title ? `[小程序: ${String(title).trim()}]` : '[小程序卡片]';
+  }
+
+  return '';
+}
+
 /** 把媒体类 CQ 码转成可读文字标注，用于引用消息摘要 */
 export function annotateCqCodes(rawMessage) {
-  return String(rawMessage ?? '')
+  const withCards = replaceCqCards(rawMessage);
+  return String(withCards ?? '')
     .replace(/\[CQ:image[^\]]*\]/g, '[图片]')
     .replace(/\[CQ:file[^\]]*\]/g, '[文件]')
     .replace(/\[CQ:face[^\]]*\]/g, '[表情]')
     .replace(new RegExp(AT_CQ_SOURCE, 'gi'), (_m, paramStr) => renderAtMention(parseCqParams(paramStr)))
     .replace(/\[CQ:[^\]]*\]/g, '')
     .trim();
+}
+
+/**
+ * 替换字符串中的富媒体卡片 CQ 码（容忍内部未转义方括号）
+ */
+export function replaceCqCards(str) {
+  if (!str || typeof str !== 'string') return '';
+
+  let result = '';
+  let i = 0;
+  while (i < str.length) {
+    if (str.startsWith('[CQ:json,', i)) {
+      const start = i;
+      const dataIdx = str.indexOf('data=', start);
+      if (dataIdx !== -1 && dataIdx < start + 15) {
+        const braceStart = str.indexOf('{', dataIdx);
+        if (braceStart !== -1) {
+          let depth = 0;
+          let inString = false;
+          let escape = false;
+          let end = -1;
+          for (let j = braceStart; j < str.length; j++) {
+            const ch = str[j];
+            if (escape) {
+              escape = false;
+              continue;
+            }
+            if (ch === '\\') {
+              escape = true;
+              continue;
+            }
+            if (ch === '"') {
+              inString = !inString;
+              continue;
+            }
+            if (!inString) {
+              if (ch === '{') depth++;
+              else if (ch === '}') {
+                depth--;
+                if (depth === 0) {
+                  const bracketEnd = str.indexOf(']', j);
+                  if (bracketEnd !== -1) end = bracketEnd + 1;
+                  break;
+                }
+              }
+            }
+          }
+          if (end !== -1) {
+            const fullCq = str.slice(start, end);
+            const paramStr = fullCq.slice('[CQ:json'.length, -1);
+            result += formatCardSummary('json', parseCqParams(paramStr));
+            i = end;
+            continue;
+          }
+        }
+      }
+    }
+    result += str[i];
+    i++;
+  }
+
+  return result
+    .replace(/\[CQ:xml((?:,[^\]]*)*)\]/gi, (_m, paramStr) => formatCardSummary('xml', parseCqParams(paramStr)))
+    .replace(/\[CQ:share((?:,[^\]]*)*)\]/gi, (_m, paramStr) => formatCardSummary('share', parseCqParams(paramStr)))
+    .replace(/\[CQ:forward((?:,[^\]]*)*)\]/gi, (_m, paramStr) => formatCardSummary('forward', parseCqParams(paramStr)));
 }
 
 /**
@@ -233,6 +384,12 @@ export function segmentsToText(segments) {
         // 在正文里显示 @三锅、在引用摘要里显示 @12345678
         case 'at': return renderAtMention(seg.data ?? {});
         case 'reply': return '';
+        case 'json':
+        case 'xml':
+        case 'share':
+        case 'forward':
+        case 'miniapp':
+          return formatCardSummary(seg.type, seg.data ?? {});
         default: return '';
       }
     })

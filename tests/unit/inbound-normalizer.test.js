@@ -438,3 +438,65 @@ test('extractAtTargets 不受参数顺序影响', () => {
     'name 在前的 at 码也要认，qq=all 不是具体的人',
   );
 });
+
+test('引用小程序/JSON卡片消息：能成功提取卡片摘要前置到正文', async () => {
+  const fixture = loadFixture('group-normal');
+  const api = {
+    async getMsg(id) {
+      assert.equal(id, '999888');
+      return {
+        message_id: 999888,
+        sender: { user_id: 222333, nickname: '蹇茕', card: '蹇茕' },
+        message: [
+          {
+            type: 'json',
+            data: {
+              data: JSON.stringify({
+                app: 'com.tencent.miniapp_01',
+                prompt: '[QQ小程序]AI 亲自玩环世界 EP.2 | 它烧了 23 亿 token，把小人玩死了',
+              }),
+            },
+          },
+        ],
+      };
+    },
+  };
+  const normalizer = makeNormalizer({ napcatApi: api });
+  const res = await normalizer.normalize({
+    ...fixture.event,
+    raw_message: '[CQ:reply,id=999888] 1',
+    message: [
+      { type: 'reply', data: { id: '999888' } },
+      { type: 'text', data: { text: ' 1' } },
+    ],
+  });
+
+  assert.ok(res.message, '消息不应被丢弃');
+  assert.equal(
+    res.message.content,
+    '[引用 蹇茕 的消息: [QQ小程序]AI 亲自玩环世界 EP.2 | 它烧了 23 亿 token，把小人玩死了] 1',
+  );
+  assert.equal(res.message.extensions.quote?.sourceMessageId, '999888');
+});
+
+test('直接发送 JSON 卡片消息：不被作为 EMPTY 丢弃，且 content 包含卡片内容', async () => {
+  const fixture = loadFixture('group-normal');
+  const normalizer = makeNormalizer();
+  const cardPayload = {
+    app: 'com.tencent.miniapp_01',
+    prompt: '[QQ小程序]AI 亲自玩环世界 EP.2',
+  };
+  const res = await normalizer.normalize({
+    ...fixture.event,
+    raw_message: `[CQ:json,data=${JSON.stringify(cardPayload)}]`,
+    message: [
+      {
+        type: 'json',
+        data: { data: JSON.stringify(cardPayload) },
+      },
+    ],
+  });
+
+  assert.ok(res.message, '纯卡片消息不应被当作 EMPTY 丢弃');
+  assert.equal(res.message.content, '[QQ小程序]AI 亲自玩环世界 EP.2');
+});

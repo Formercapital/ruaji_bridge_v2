@@ -105,7 +105,7 @@ export class InboundNormalizer {
 
     const sender = normalizeSender(rawEvent.sender, userId);
     const segments = this._parseSegments(rawEvent, rawMessage);
-    const text = stripCqCodes(rawMessage) || segmentsToText(rawEvent.message);
+    const text = stripCqCodes(rawMessage) || segmentsToText(rawEvent.message) || annotateCqCodes(rawMessage);
 
     // 群消息原文含聊天内容，只在 debug 级留，且不整条 dump 进日志文件
     this.log.debug?.('群消息片段', {
