@@ -369,6 +369,8 @@ export class InboundFlow {
   }
 
   async _runGeneration(executionKey) {
+    await this.sessions.waitForStop(executionKey);
+    if (this.sessions.isBusy(executionKey)) return;
     const pending = this.sessions.drainBuffer(executionKey);
     if (pending.length === 0) return;
 

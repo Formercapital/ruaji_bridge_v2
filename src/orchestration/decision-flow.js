@@ -203,6 +203,7 @@ export class DecisionFlow {
    */
   async arbitrateConcurrency(inbound, decision = null) {
     const key = inbound.executionKey;
+    await this.sessions.waitForStop(key);
     if (!this.sessions.isBusy(key)) return { action: 'start' };
 
     const role = getIdentityRole(inbound.userId, this.config.identity);
@@ -240,21 +241,32 @@ export class DecisionFlow {
           detail: result.detail ?? null,
         });
       }
-      if (role === 'admin') {
-        if (getIdentityRole(inbound.userId, this.config.identity) !== 'admin') return { action: 'drop' };
-        if (!this.sessions.isBusy(key)) return { action: 'start' };
-        if (this.sessions.getActive(key) !== interventionActive) return { action: 'queue' };
-      }
+      if (role === 'admin' && getIdentityRole(inbound.userId, this.config.identity) !== 'admin') return { action: 'drop' };
+      if (!this.sessions.isBusy(key)) return { action: 'start' };
+      if (this.sessions.getActive(key) !== interventionActive) return { action: 'queue' };
+      const releaseStop = this.sessions.holdForStop(key);
       const preempted = this.sessions.preempt(
         key,
         new PreemptedError('interrupted by newer owner/admin message', {
           correlationId: inbound.correlationId,
         }),
       );
+      let stopResult;
+      try {
+        if (preempted && typeof this.modelRouter?.stop === 'function') {
+          stopResult = await this.modelRouter.stop(interventionActive?.sessionKey ?? key, { timeoutMs: 2500 });
+        }
+      } catch (err) {
+        stopResult = { ok: false, code: 'stop_failed', detail: err.message };
+      } finally {
+        releaseStop();
+      }
       this.log.info('管理者介入生效，已中断在途生成', {
         correlationId: inbound.correlationId,
         executionKey: key,
         preempted,
+        serverStopAcknowledged: stopResult?.ok === true,
+        serverStopCode: stopResult?.code ?? null,
       });
       return { action: 'preempt' };
     }

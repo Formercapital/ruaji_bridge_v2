@@ -4,6 +4,7 @@ import { DecisionFlow } from '../../src/orchestration/decision-flow.js';
 import { SessionStore } from '../../src/storage/session-store.js';
 import { createInboundMessage } from '../../src/contracts/messages.js';
 import { createTestLogger } from '../helpers.js';
+import { InboundFlow } from '../../src/orchestration/inbound-flow.js';
 
 function setup(fetchImpl) {
   const config = { identity: { ownerId: '1', adminIds: ['2'] }, favourUltraEnabled: true,
@@ -18,6 +19,73 @@ function setup(fetchImpl) {
   return { flow, config, sessions, controller, inbound, calls };
 }
 const response = (body, ok = true) => ({ ok, json: async () => body });
+
+test('redirect rejection actively stops Hermes before allowing replacement generation', async () => {
+  const ctx = setup(async () => response({ ok: true, allowed: true }));
+  let finishStop;
+  const stopped = new Promise((resolve) => { finishStop = resolve; });
+  let stopCalls = 0;
+  ctx.flow.modelRouter.redirect = async () => ({ ok: false, code: 'redirect_not_accepted' });
+  ctx.flow.modelRouter.stop = async (key) => {
+    assert.equal(key, 'original-run');
+    stopCalls++;
+    return stopped;
+  };
+  let settled = false;
+  const pending = ctx.flow.arbitrateConcurrency(ctx.inbound).then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopCalls, 1);
+  assert.equal(settled, false);
+  assert.equal(ctx.controller.signal.aborted, true);
+  finishStop({ ok: true, stopped: true });
+  assert.equal((await pending).action, 'preempt');
+});
+
+test('queued generation and concurrent messages wait for outstanding server stop', async () => {
+  const ctx = setup(async () => response({ ok: true, allowed: true }));
+  ctx.flow.modelRouter.redirect = async () => ({ ok: false });
+  let finishStop;
+  ctx.flow.modelRouter.stop = () => new Promise((resolve) => { finishStop = resolve; });
+  const pending = ctx.flow.arbitrateConcurrency(ctx.inbound);
+  await new Promise((resolve) => setImmediate(resolve));
+  let generated = 0;
+  const flow = new InboundFlow({ config: ctx.config, sessionStore: ctx.sessions, logger: createTestLogger(),
+    contextFlow: { collect: async () => ({ blocks: [] }) },
+    replyFlow: { run: async () => { generated++; return { status: 'ok' }; }, waitForDelivery: async () => {} },
+  });
+  flow._buffer(ctx.inbound, { route: 'direct' });
+  const generation = flow._runGeneration(ctx.inbound.executionKey);
+  let concurrentSettled = false;
+  const concurrent = ctx.flow.arbitrateConcurrency(ctx.inbound).then(() => { concurrentSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(generated, 0);
+  assert.equal(concurrentSettled, false);
+  finishStop({ ok: true, stopped: true });
+  await Promise.all([pending, generation, concurrent]);
+  assert.equal(generated, 1);
+});
+
+test('stop errors release the barrier and preserve local cancellation', async () => {
+  const ctx = setup(async () => response({ ok: true, allowed: true }));
+  ctx.flow.modelRouter.redirect = async () => ({ ok: false });
+  ctx.flow.modelRouter.stop = async () => { throw new Error('unreachable'); };
+  assert.equal((await ctx.flow.arbitrateConcurrency(ctx.inbound)).action, 'preempt');
+  await ctx.sessions.waitForStop(ctx.inbound.executionKey);
+  assert.equal(ctx.controller.signal.aborted, true);
+});
+
+test('owner redirect rejection must not stop a replacement run', async () => {
+  const ctx = setup(async () => assert.fail('owner does not preflight'));
+  ctx.inbound.userId = '1';
+  const replacement = new AbortController();
+  ctx.flow.modelRouter.redirect = async () => {
+    ctx.sessions.beginExecution(ctx.inbound.executionKey, { controller: replacement });
+    return { ok: false };
+  };
+  ctx.flow.modelRouter.stop = async () => assert.fail('must not stop successor');
+  assert.equal((await ctx.flow.arbitrateConcurrency(ctx.inbound)).action, 'queue');
+  assert.equal(replacement.signal.aborted, false);
+});
 
 test('admin preflight precedes redirect, preserves original run and labels administrator', async () => {
   let payload;

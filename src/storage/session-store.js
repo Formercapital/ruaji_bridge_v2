@@ -29,6 +29,7 @@ export class SessionStore {
     this.activeExecutions = new Map();
     /** executionKey -> { pending: [], timer } */
     this.pendingBuffers = new Map();
+    this.stopBarriers = new Map();
   }
 
   // ===== 群聊滑窗 =====
@@ -109,6 +110,20 @@ export class SessionStore {
 
   getActive(executionKey) {
     return this.activeExecutions.get(executionKey) ?? null;
+  }
+
+  holdForStop(executionKey) {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    this.stopBarriers.set(executionKey, pending);
+    return () => {
+      if (this.stopBarriers.get(executionKey) === pending) this.stopBarriers.delete(executionKey);
+      release();
+    };
+  }
+
+  async waitForStop(executionKey) {
+    while (this.stopBarriers.has(executionKey)) await this.stopBarriers.get(executionKey);
   }
 
   isBusy(executionKey) {
