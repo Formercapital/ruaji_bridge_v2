@@ -57,6 +57,7 @@ export class SessionStore {
    * 防抖合并批次里每条都已入窗，只排最后一条会让先到的消息出现两遍（P1 联动）。
    */
   renderContext(sessionId, count, excludeMessageId = null) {
+    if (!count || count <= 0) return '';
     let window = this.contextWindows.get(sessionId) ?? [];
     if (excludeMessageId) {
       const exclude = new Set(

@@ -49,6 +49,8 @@ export class ContextFlow {
       priority: 60,
       collect: (input) => {
         if (input.messageType !== MESSAGE_TYPES.GROUP) return [];
+        const injectCount = this.config.decision?.localWindowInject ?? 6;
+        if (injectCount <= 0) return [];
         // 防抖合并批次要整批排除：每条都已入窗，只排最后一条会让先到的消息
         // 在 [最近群聊消息] 里出现两遍（P1 联动）
         const batch = input.inbound?.extensions?.batch;
