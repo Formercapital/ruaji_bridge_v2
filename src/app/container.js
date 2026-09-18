@@ -87,7 +87,7 @@ export function createContainer(config, overrides = {}) {
    */
   const favourClient = new FavourClient({
     baseUrl: config.favourUltraEnabled ? (config.unifiedHost?.baseUrl ?? '') : '',
-    timeoutMs: config.context?.collectTimeoutMs ?? 2500,
+    timeoutMs: config.context?.collectTimeoutMs ?? 5000,
     logger,
     fetchImpl,
   });

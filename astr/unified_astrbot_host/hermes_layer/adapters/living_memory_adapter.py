@@ -108,7 +108,7 @@ class LivingMemoryAdapter(UnifiedPluginContract):
             return []
 
         started = time.perf_counter()
-        timeout_s = getattr(self._unified, "_context_timeout_s", 2.5)
+        timeout_s = getattr(self._unified, "_context_timeout_s", 5.0)
 
         try:
             await asyncio.wait_for(self._invoke(event, req, handlers), timeout=timeout_s)

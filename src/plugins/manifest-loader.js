@@ -143,7 +143,7 @@ function normalizeManifest(raw) {
         priority: Number.isFinite(c.priority) ? c.priority : 50,
         path: c.path ?? null,
         method: (c.method ?? 'POST').toUpperCase(),
-        timeoutMs: c.timeoutMs ?? raw.timeouts?.requestMs ?? 2500,
+        timeoutMs: c.timeoutMs ?? raw.timeouts?.requestMs ?? 5000,
         body: c.body ?? null,
         query: c.query ?? null,
         resultPath: c.resultPath ?? null,
@@ -161,7 +161,7 @@ function normalizeManifest(raw) {
     ),
     timeouts: Object.freeze({
       connectMs: raw.timeouts?.connectMs ?? 1000,
-      requestMs: raw.timeouts?.requestMs ?? 2500,
+      requestMs: raw.timeouts?.requestMs ?? 5000,
     }),
     retry: Object.freeze({
       maxAttempts: raw.retry?.maxAttempts ?? 1,

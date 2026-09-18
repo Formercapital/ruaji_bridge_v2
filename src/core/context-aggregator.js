@@ -21,14 +21,14 @@ export class ContextAggregator {
    * @param {import('./logger.js').Logger} opts.logger
    * @param {number} [opts.totalCharacterBudget=12000]
    * @param {number} [opts.perSourceCharacterBudget=4000]
-   * @param {number} [opts.collectTimeoutMs=2500]
+   * @param {number} [opts.collectTimeoutMs=5000]
    */
   constructor(opts = {}) {
     this.capabilityBus = opts.capabilityBus;
     this.log = opts.logger?.child({ component: 'context-aggregator' }) ?? console;
     this.totalBudget = opts.totalCharacterBudget ?? 12000;
     this.perSourceBudget = opts.perSourceCharacterBudget ?? 4000;
-    this.collectTimeoutMs = opts.collectTimeoutMs ?? 2500;
+    this.collectTimeoutMs = opts.collectTimeoutMs ?? 5000;
     /** 进程内 Provider：不走 HTTP，但一样返回 ContextBlock */
     this.localProviders = [];
   }

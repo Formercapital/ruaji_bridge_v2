@@ -142,6 +142,27 @@ class FavourManagerTool(Star):
             level_threshold=self.perm_level_threshold
         )
 
+        # 主人身份解析：仅真正的 owner 享有满分/亲密排他守卫
+        cfg = context.get_config() if context.get_config() else {}
+        _raw_owners = cfg.get("owner_ids")
+        if _raw_owners is None and cfg.get("owner_id"):
+            _raw_owners = [cfg.get("owner_id")]
+        if not _raw_owners:
+            try:
+                _bridge_cfg = Path(__file__).resolve().parents[2] / "bridge.config.json"
+                if _bridge_cfg.is_file():
+                    import json
+                    with open(_bridge_cfg, "r", encoding="utf-8") as bf:
+                        bdata = json.load(bf)
+                        oid = (bdata.get("identity") or {}).get("ownerId")
+                        if oid:
+                            _raw_owners = [str(oid)]
+            except Exception:
+                pass
+        if not _raw_owners and self.admins_id:
+            _raw_owners = [str(self.admins_id[0])]
+        self.owner_ids = [str(x) for x in (_raw_owners or []) if str(x).strip()]
+
         # 数据库初始化（主人记录守卫下沉到 DB 写入口：评分/全局修改/面板编辑/清空/删除/衰减全走这里）
         self.data_dir = Path(context.get_config().get("plugin.data_dir", "./data")) / "plugin_data" / "astrbot_plugin_favour_ultra"
         # 主人记录落在运行时共享会话键上（宿主 platform.id），与精确查找同键，
@@ -149,7 +170,7 @@ class FavourManagerTool(Star):
         _shared_key = str(context.get_config().get("platform.id") or "") if context.get_config() else ""
         self.db_manager = FavourDBManager(
             self.data_dir, self.min_favour_value, self.max_favour_value,
-            owner_ids=self.admins_id, owner_session_key=_shared_key,
+            owner_ids=self.owner_ids, owner_session_key=_shared_key,
         )
         
         # 异步初始化数据库和迁移数据
@@ -1202,7 +1223,7 @@ class FavourManagerTool(Star):
         propagate: bool = True,
     ) -> bool:
         """写入好感度并按需双向同步到配对会话。"""
-        owner_ids = {str(item) for item in self.admins_id}
+        owner_ids = {str(item) for item in self.owner_ids}
         if str(user_id) in owner_ids:
             # The bridge owner record is immutable from plugin operations.
             # Initialization is allowed to create/repair the fixed owner row.
@@ -2124,7 +2145,7 @@ class FavourManagerTool(Star):
                 # 这里补一份排他快照（主人绑定置顶），使其他用户的上下文
                 # 能看到排他事实，模型对排他语义有一致事实来源。
                 try:
-                    owner_ids = {str(item) for item in self.admins_id}
+                    owner_ids = {str(item) for item in self.owner_ids}
                     global_records = await self.db_manager.get_global_records()
                     unique_rows = []
                     for r in global_records:
@@ -2975,7 +2996,7 @@ class FavourManagerTool(Star):
             return
 
         # 主人记录不参与冷暴力（桥接主人特例的硬保证）
-        if str(target_uid) in {str(item) for item in self.admins_id}:
+        if str(target_uid) in {str(item) for item in self.owner_ids}:
             yield event.plain_result("无法对主人施加冷暴力。")
             return
 

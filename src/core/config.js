@@ -63,7 +63,7 @@ const DEFAULTS = {
       notice: '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~',
     },
   },
-  context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 2500 },
+  context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 5000 },
   reply: {
     sendEnabled: true,
     sideEffectsEnabled: true,

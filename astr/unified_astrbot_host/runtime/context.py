@@ -117,6 +117,9 @@ class UnifiedContext:
                     current_admins.append(str(_aid))
         else:
             config["admins_id"] = admins_list
+        config["owner_id"] = _owner_id
+        config["owner_ids"] = [_owner_id] if _owner_id else []
+        config["admin_ids"] = [str(x) for x in _admin_ids if str(x) != _owner_id]
         config.setdefault("data", data_root)
         config.setdefault("plugin.data_dir", data_root)
         config.setdefault("platform.id", "aiocqhttp")

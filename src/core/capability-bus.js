@@ -62,7 +62,7 @@ export class CapabilityBus {
     if (typeof provider.invoke !== 'function') throw new TypeError('provider.invoke 必须是函数');
 
     const list = this.providers.get(provider.capability) ?? [];
-    const entry = { priority: 50, timeoutMs: 2500, retry: { maxAttempts: 1, backoffMs: 250 }, ...provider };
+    const entry = { priority: 50, timeoutMs: 5000, retry: { maxAttempts: 1, backoffMs: 250 }, ...provider };
     list.push(entry);
     list.sort((a, b) => b.priority - a.priority);
     this.providers.set(provider.capability, list);
@@ -252,7 +252,7 @@ export class CapabilityBus {
   }
 
   async _callOnce(provider, capability, input, ctx) {
-    const timeoutMs = provider.timeoutMs ?? 2500;
+    const timeoutMs = provider.timeoutMs ?? 5000;
     const controller = new AbortController();
     const onAbort = () => controller.abort(ctx.signal?.reason);
     if (ctx.signal) {

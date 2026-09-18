@@ -122,7 +122,7 @@ export function createConfigApi(deps) {
         context: {
           totalCharacterBudget: config.context?.totalCharacterBudget ?? 12000,
           perSourceCharacterBudget: config.context?.perSourceCharacterBudget ?? 4000,
-          collectTimeoutMs: config.context?.collectTimeoutMs ?? 2500,
+          collectTimeoutMs: config.context?.collectTimeoutMs ?? 5000,
         },
         reply: {
           sendEnabled: Boolean(config.reply?.sendEnabled),
@@ -458,7 +458,7 @@ export function createConfigApi(deps) {
           ...(diskConfig.context || {}),
           totalCharacterBudget: updates.context.totalCharacterBudget != null ? Number(updates.context.totalCharacterBudget) : (diskConfig.context?.totalCharacterBudget ?? 12000),
           perSourceCharacterBudget: updates.context.perSourceCharacterBudget != null ? Number(updates.context.perSourceCharacterBudget) : (diskConfig.context?.perSourceCharacterBudget ?? 4000),
-          collectTimeoutMs: updates.context.collectTimeoutMs != null ? Number(updates.context.collectTimeoutMs) : (diskConfig.context?.collectTimeoutMs ?? 2500),
+          collectTimeoutMs: updates.context.collectTimeoutMs != null ? Number(updates.context.collectTimeoutMs) : (diskConfig.context?.collectTimeoutMs ?? 5000),
         };
       }
 

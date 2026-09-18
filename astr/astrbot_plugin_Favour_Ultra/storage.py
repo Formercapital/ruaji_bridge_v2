@@ -281,6 +281,20 @@ class FavourDBManager:
                         record.is_unique = True
                         record.updated_at = now
                         count += 1
+
+                # 清洗历史误判：非主人用户若曾被误写入 username="主人" 或误设亲密排他，解除排他与称谓
+                clean_stmt = select(FavourRecord).where(
+                    FavourRecord.user_id.notin_(list(self.owner_ids)),
+                    (FavourRecord.username == "主人") | ((FavourRecord.relationship == "亲密") & (FavourRecord.is_unique == True))
+                )
+                false_owners = (await session.execute(clean_stmt)).scalars().all()
+                for fo in false_owners:
+                    if fo.username == "主人":
+                        fo.username = ""
+                    if fo.relationship == "亲密" and fo.is_unique:
+                        fo.is_unique = False
+                    fo.updated_at = now
+                    count += 1
                 await session.commit()
             if count:
                 logger.info(f"[主人守卫] 已重建/修复 {count} 条主人记录（满分+亲密+排他）")

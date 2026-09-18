@@ -216,7 +216,7 @@ class ContextBuilder:
     高 order 的适配器（如 GCP）可以看到低 order（如 LivingMemory）的产出。
     """
 
-    def __init__(self, unified: Any, timeout_ms: int = 2500) -> None:
+    def __init__(self, unified: Any, timeout_ms: int = 5000) -> None:
         self._unified = unified
         self.timeout_s = max(0.2, timeout_ms / 1000.0)
         # 缓存超时供 adapters 读取

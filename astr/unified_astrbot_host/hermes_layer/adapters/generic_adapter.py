@@ -88,7 +88,7 @@ class GenericPluginAdapter(UnifiedPluginContract):
         req = build_request(message, history)
         baseline = copy.deepcopy(req)
 
-        timeout_s = float(getattr(self._unified, "_context_timeout_s", 2.5))
+        timeout_s = float(getattr(self._unified, "_context_timeout_s", 5.0))
         started = time.perf_counter()
         try:
             await asyncio.wait_for(self._invoke_all(event, req, handlers), timeout=timeout_s)
