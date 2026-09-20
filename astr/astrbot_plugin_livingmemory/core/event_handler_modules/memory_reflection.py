@@ -256,8 +256,16 @@ class MemoryReflection:
                         )
                         return
 
-                    # 合并范围：使用待处理的起始位置
-                    start_index = pending_start
+                    # 防呆保护：若 pending_start 倒挂越界（例如消息被裁剪后总数变小），回退到合法范围
+                    if pending_start >= end_index:
+                        logger.warning(
+                            f"[{session_id}] 待处理起始位置 {pending_start} >= 当前总消息数 {end_index}（消息可能已被裁剪），"
+                            f"重置起始位置为 last_summarized_index({last_summarized_index})"
+                        )
+                        start_index = min(last_summarized_index, end_index)
+                    else:
+                        start_index = min(last_summarized_index, pending_start)
+
                     logger.info(
                         f"[{session_id}] 合并待处理失败总结，新范围 [{start_index}:{end_index}], "
                         f"重试次数: {retry_count + 1}/3"
@@ -265,6 +273,10 @@ class MemoryReflection:
 
                 if end_index - start_index < 2:
                     logger.debug(f"[{session_id}] 消息数不足一轮对话，跳过总结")
+                    if pending_summary and pending_summary.get("start_index", 0) >= end_index:
+                        await self.conversation_manager.update_session_metadata(
+                            session_id, "pending_summary", None
+                        )
                     return
 
                 messages_to_summarize = end_index - start_index

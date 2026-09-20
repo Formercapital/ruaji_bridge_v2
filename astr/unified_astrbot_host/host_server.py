@@ -170,6 +170,8 @@ class HostServer:
                 web.post("/api/v1/memes/delete", self.handle_memes_delete),
                 web.get("/api/v1/memes/settings", self.handle_memes_settings),
                 web.post("/api/v1/memes/settings", self.handle_memes_settings_update),
+                web.get("/api/v1/livingmemory/sessions", self.handle_livingmemory_sessions),
+                web.post("/api/v1/livingmemory/summarize", self.handle_livingmemory_summarize),
             ]
         )
         # 插件原生页面：/plug/{key}/page|assets|api（hermes_layer/plugin_pages.py）
@@ -829,6 +831,250 @@ class HostServer:
         self.unified.config.setdefault("community_memes", {}).update(patch)
         logger.info("[社区梗库] 梗雷达设置已更新: %s", patch)
         return await self.handle_memes_settings(request)
+
+    # ---------- livingmemory 手动总结与会话状态 ----------
+
+    def _living_memory_components(self) -> tuple[Any, Any, Any]:
+        plugin = self.unified.plugin("living_memory")
+        if not plugin:
+            return None, None, None
+        initializer = getattr(plugin, "initializer", None)
+        cm = getattr(initializer, "conversation_manager", None) or getattr(plugin, "conversation_manager", None)
+        engine = self.unified.memory_engine()
+        processor = getattr(initializer, "memory_processor", None) or getattr(plugin, "memory_processor", None)
+        return cm, engine, processor
+
+    async def handle_livingmemory_sessions(self, request: web.Request) -> web.Response:  # noqa: ARG002
+        """获取所有会话的未总结消息状态。"""
+        cm, _, _ = self._living_memory_components()
+        if not cm or not getattr(cm, "store", None):
+            return _json({"ok": False, "error": "living_memory_not_ready"}, status=503)
+
+        sessions = await cm.store.get_all_sessions()
+        out = []
+        for s in sessions:
+            actual_count = await cm.store.get_message_count(s.session_id)
+            last_idx = await cm.get_session_metadata(s.session_id, "last_summarized_index", 0)
+            try:
+                last_idx = int(last_idx or 0)
+            except (ValueError, TypeError):
+                last_idx = 0
+            pending = await cm.get_session_metadata(s.session_id, "pending_summary", None)
+            unsummarized = max(0, actual_count - last_idx)
+            out.append({
+                "session_id": s.session_id,
+                "message_count": actual_count,
+                "last_summarized_index": last_idx,
+                "unsummarized_count": unsummarized,
+                "pending_summary": pending,
+            })
+        out.sort(key=lambda x: x["unsummarized_count"], reverse=True)
+        return _json({"ok": True, "count": len(out), "sessions": out})
+
+    async def handle_livingmemory_summarize(self, request: web.Request) -> web.Response:
+        """手动触发一个或全部会话的记忆总结。"""
+        body = await _read_json(request)
+        session_id = str(body.get("session_id") or "").strip()
+        message_count = body.get("message_count")
+        force = bool(body.get("force", False))
+
+        cm, engine, processor = self._living_memory_components()
+        if not cm or not engine or not processor:
+            return _json({
+                "ok": False,
+                "error": "components_not_ready",
+                "message": "LivingMemory 组件尚未完成初始化",
+            }, status=503)
+
+        # 补全 session_id
+        if session_id and not session_id.startswith("aiocqhttp:"):
+            if session_id.isdigit():
+                group_sid = f"aiocqhttp:GroupMessage:{session_id}"
+                friend_sid = f"aiocqhttp:FriendMessage:{session_id}"
+                all_s = await cm.store.get_all_sessions()
+                known = {s.session_id for s in all_s}
+                if group_sid in known:
+                    session_id = group_sid
+                elif friend_sid in known:
+                    session_id = friend_sid
+                else:
+                    session_id = group_sid
+
+        target_sessions = [session_id] if session_id else []
+        if not target_sessions:
+            all_s = await cm.store.get_all_sessions()
+            for s in all_s:
+                actual = await cm.store.get_message_count(s.session_id)
+                last_idx = await cm.get_session_metadata(s.session_id, "last_summarized_index", 0)
+                try:
+                    last_idx = int(last_idx or 0)
+                except (ValueError, TypeError):
+                    last_idx = 0
+                if actual - last_idx >= 2 or force:
+                    target_sessions.append(s.session_id)
+
+        if not target_sessions:
+            return _json({
+                "ok": True,
+                "message": "暂无需要总结的会话（未总结轮数不足）",
+                "results": [],
+            })
+
+        results = []
+        for sid in target_sessions:
+            item_res = await self._execute_session_summarize(
+                cm=cm,
+                engine=engine,
+                processor=processor,
+                session_id=sid,
+                message_count=message_count,
+                force=force,
+            )
+            results.append(item_res)
+
+        all_ok = all(r.get("ok") for r in results)
+        return _json({
+            "ok": all_ok,
+            "total": len(results),
+            "results": results,
+        })
+
+    async def _execute_session_summarize(
+        self,
+        cm: Any,
+        engine: Any,
+        processor: Any,
+        session_id: str,
+        message_count: int | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        import traceback
+        from astrbot_plugin_livingmemory.core.memory_source import serialize_source_messages
+
+        try:
+            actual_count = await cm.store.get_message_count(session_id)
+            last_summarized_index = await cm.get_session_metadata(session_id, "last_summarized_index", 0)
+            try:
+                last_summarized_index = int(last_summarized_index or 0)
+            except (ValueError, TypeError):
+                last_summarized_index = 0
+
+            # 越界防呆
+            if last_summarized_index > actual_count:
+                last_summarized_index = actual_count
+                await cm.update_session_metadata(session_id, "last_summarized_index", actual_count)
+
+            if message_count is not None:
+                start_index = max(0, actual_count - max(2, int(message_count)))
+            else:
+                start_index = last_summarized_index
+
+            end_index = actual_count
+            unsummarized = end_index - start_index
+
+            if unsummarized < 2 and not force:
+                return {
+                    "ok": True,
+                    "session_id": session_id,
+                    "skipped": True,
+                    "message": f"未总结消息不足2条（总数={actual_count}, 上次={last_summarized_index}）",
+                }
+
+            history_messages = await cm.get_messages_range(
+                session_id=session_id, start_index=start_index, end_index=end_index
+            )
+            if not history_messages:
+                return {
+                    "ok": False,
+                    "session_id": session_id,
+                    "error": "empty_messages",
+                    "message": f"读取消息失败或范围 [{start_index}:{end_index}] 为空",
+                }
+
+            is_group_chat = "GroupMessage" in session_id or bool(
+                history_messages[0].group_id if history_messages else False
+            )
+            persona_id = "ruaji"
+            memory_scope = session_id
+
+            try:
+                content, metadata, importance = await processor.process_conversation(
+                    messages=history_messages,
+                    is_group_chat=is_group_chat,
+                    persona_id=persona_id,
+                )
+            except Exception as llm_err:
+                logger.error("手动总结 LLM 调用失败: %s", llm_err, exc_info=True)
+                return {
+                    "ok": False,
+                    "session_id": session_id,
+                    "error": "llm_call_failed",
+                    "error_type": type(llm_err).__name__,
+                    "error_message": str(llm_err),
+                    "traceback": traceback.format_exc(),
+                    "range": [start_index, end_index],
+                    "message": f"LLM 处理失败: {llm_err}",
+                }
+
+            atoms = processor.classify_atoms_from_metadata(
+                metadata=metadata,
+                parent_importance=importance,
+                session_id=memory_scope,
+                persona_id=persona_id,
+            )
+
+            metadata["source_window"] = {
+                "session_id": session_id,
+                "start_index": start_index,
+                "end_index": end_index,
+                "message_count": end_index - start_index,
+                "triggered_by": "manual_api",
+            }
+            metadata["source_session_id"] = session_id
+
+            cfg = getattr(processor, "config_manager", None)
+            source_threshold = float(
+                cfg.get("reflection_engine.source_retention_importance_threshold", 0.8)
+                if cfg else 0.8
+            )
+            source_messages = (
+                serialize_source_messages(history_messages)
+                if importance >= source_threshold
+                else None
+            )
+
+            await engine.add_memory(
+                content=content,
+                session_id=memory_scope,
+                persona_id=persona_id,
+                importance=importance,
+                metadata=metadata,
+                atoms=atoms,
+                source_messages=source_messages,
+            )
+
+            await cm.update_session_metadata(session_id, "last_summarized_index", end_index)
+            await cm.update_session_metadata(session_id, "pending_summary", None)
+
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "range": [start_index, end_index],
+                "message_count": len(history_messages),
+                "topics": metadata.get("topics", []),
+                "importance": round(importance, 2),
+                "atoms_count": len(atoms) if atoms else 0,
+                "summary": (content[:150] + "...") if len(content) > 150 else content,
+            }
+        except Exception as exc:
+            logger.error("手动总结执行异常: %s", exc, exc_info=True)
+            return {
+                "ok": False,
+                "session_id": session_id,
+                "error": type(exc).__name__,
+                "error_message": str(exc),
+                "traceback": traceback.format_exc(),
+            }
 
     async def start(self) -> None:
         self._runner = web.AppRunner(self.app, access_log=None)
