@@ -429,6 +429,169 @@ test('redirect 带引用消息时，前置引用摘要：模型能看清主人�
   );
 });
 
+test('主人纯图片介入（media 标准契约）：无文字也生成合法 redirect 文本并入在途轮', async () => {
+  const sessions = new SessionStore();
+  const redirectCalls = [];
+  const flow = makeFlow();
+  flow.modelRouter = { redirect: async (key, text) => { redirectCalls.push(text); return { ok: true }; } };
+  flow.config = { ...flow.config, decision: { ...flow.config.decision, ownerRedirect: true } };
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '',
+    content: '[图片消息]',
+    sender: { nickname: 'ruaji', card: '', displayName: 'ruaji' },
+    flags: { isOwner: true },
+    media: [{ kind: 'image', url: 'https://example.com/cat.jpg', origin: 'message' }],
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'awaiting');
+  assert.equal(result.redirected, true);
+  assert.equal(controller.signal.aborted, false, 'redirect 成功不得打断在途轮');
+  assert.equal(redirectCalls.length, 1);
+  assert.equal(
+    redirectCalls[0],
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：[图片: https://example.com/cat.jpg]',
+  );
+});
+
+test('主人图文混合介入：文字在前，图片链接紧随', async () => {
+  const flow = makeFlow();
+  const owner = makeInbound({
+    userId: '10000001',
+    text: '你看这题怎么做',
+    sender: { displayName: 'ruaji' },
+    flags: { isOwner: true },
+    media: [{ kind: 'image', url: 'https://example.com/math.png', origin: 'message' }],
+  });
+  assert.equal(
+    flow._redirectTextOf(owner),
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：你看这题怎么做 [图片: https://example.com/math.png]',
+  );
+});
+
+test('主人多图：url 优先，本地落盘路径转 file:///，同图去重', async () => {
+  const flow = makeFlow();
+  const owner = makeInbound({
+    userId: '10000001',
+    text: '对比两张',
+    sender: { displayName: 'ruaji' },
+    flags: { isOwner: true },
+    media: [
+      { kind: 'image', url: 'https://example.com/img1.png', origin: 'message' },
+      { kind: 'image', url: 'https://example.com/img1.png', origin: 'message' },
+      { kind: 'image', localPath: 'F:\\received_images\\img2.png', origin: 'message' },
+    ],
+  });
+  assert.equal(
+    flow._redirectTextOf(owner),
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：对比两张 [图片: https://example.com/img1.png] [图片: file:///F:/received_images/img2.png]',
+  );
+});
+
+test('segments 兜底：media 为空时从 NapCat 原始分段取图', async () => {
+  const flow = makeFlow();
+  const owner = makeInbound({
+    userId: '10000001',
+    text: '',
+    content: '',
+    sender: { displayName: 'ruaji' },
+    flags: { isOwner: true },
+    segments: [
+      { type: 'text', data: { text: '' } },
+      { type: 'image', data: { url: 'https://example.com/from-segments.png' } },
+    ],
+  });
+  assert.equal(
+    flow._redirectTextOf(owner),
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：[图片: https://example.com/from-segments.png]',
+  );
+});
+
+test('引用消息里的图片（origin=quote）不属于本条补充，不重复进正文', async () => {
+  const flow = makeFlow();
+  const owner = makeInbound({
+    userId: '10000001',
+    text: '看这张',
+    sender: { displayName: 'ruaji' },
+    flags: { isOwner: true, hasQuote: true },
+    media: [{ kind: 'image', url: 'https://example.com/quoted.png', origin: 'quote' }],
+    extensions: { quote: { summary: '[引用 狼三千 的消息: [图片]]', sourceMessageId: '12345' } },
+  });
+  assert.equal(
+    flow._redirectTextOf(owner),
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：[引用 狼三千 的消息: [图片]] 看这张',
+  );
+});
+
+test('主人引用 + 纯图片介入：引用摘要在前，图片链接在后', async () => {
+  const flow = makeFlow();
+  const owner = makeInbound({
+    userId: '10000001',
+    text: '',
+    content: '',
+    sender: { displayName: 'ruaji' },
+    flags: { isOwner: true, hasQuote: true },
+    media: [{ kind: 'image', url: 'https://example.com/answer.png', origin: 'message' }],
+    extensions: { quote: { summary: '[引用 狼三千 的消息: 这是什么]', sourceMessageId: '12345' } },
+  });
+  assert.equal(
+    flow._redirectTextOf(owner),
+    '【主人介入】ruaji(ID:10000001)在你回复期间补充：[引用 狼三千 的消息: 这是什么] [图片: https://example.com/answer.png]',
+  );
+});
+
+test('纯图片介入且 redirect 失败：回退硬打断（preempt）', async () => {
+  const sessions = new SessionStore();
+  const flow = makeRedirectFlow({ ok: false, code: 'no_active_run' });
+  const controller = new AbortController();
+  sessions.beginExecution('group_793019665', {
+    controller,
+    source: 'direct',
+    sessionKey: 'group_793019665',
+  });
+  flow.sessions = sessions;
+
+  const owner = makeInbound({
+    userId: '10000001',
+    executionKey: 'group_793019665',
+    text: '',
+    flags: { isOwner: true },
+    media: [{ kind: 'image', url: 'https://example.com/cat.jpg', origin: 'message' }],
+  });
+  const result = await flow.arbitrateConcurrency(owner, { route: ROUTES.DIRECT });
+
+  assert.equal(result.action, 'preempt', 'redirect 失败必须回退到硬打断');
+  assert.equal(controller.signal.aborted, true);
+});
+
+test('管理员介入携带图片：显示【管理员介入】前缀', async () => {
+  const flow = makeFlow();
+  flow.config.identity = { ...flow.config.identity, adminIds: ['20000002'] };
+
+  const adminInbound = makeInbound({
+    userId: '20000002',
+    text: '违规图存档',
+    sender: { displayName: 'Admin' },
+    flags: { isOwner: false, isAdmin: true },
+    media: [{ kind: 'image', url: 'https://example.com/violation.jpg', origin: 'message' }],
+  });
+  assert.equal(
+    flow._redirectTextOf(adminInbound),
+    '【管理员介入】Admin(ID:20000002)在你回复期间补充：违规图存档 [图片: https://example.com/violation.jpg]',
+  );
+});
+
+
 test('Golden fixture 的裁决结果符合预期', async () => {
   const logger = createTestLogger();
   const normalizer = new InboundNormalizer({ identity: CONFIG.identity, wake: CONFIG.wake, logger });

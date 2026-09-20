@@ -221,11 +221,12 @@ export class DecisionFlow {
         if (!this.sessions.isBusy(key)) return { action: 'start' };
         if (this.sessions.getActive(key) !== active) return { action: 'queue' };
       }
-      if (this.config.decision.ownerRedirect !== false && this.modelRouter && this._redirectTextOf(inbound)) {
+      const redirectText = this._redirectTextOf(inbound);
+      if (this.config.decision.ownerRedirect !== false && this.modelRouter && redirectText) {
         const active = this.sessions.getActive(key);
         const result = await this.modelRouter.redirect(
           active?.sessionKey ?? key,
-          this._redirectTextOf(inbound),
+          redirectText,
         );
         if (result.ok) {
           this.log.info('管理者补充已并入在途生成（redirect），不打断当前轮', {
@@ -320,23 +321,56 @@ export class DecisionFlow {
   /**
    * redirect 用的人话文本：带 OneBot at 段的原文对模型没有意义，
    * 取 text（已去掉 CQ 码）；若存在引用消息则拼接引用摘要；没有就退 content。
-   * 前缀主人身份——在途轮可能是回别人的，裸文本会被模型误认为是
+   * 图片按桥接标准契约 inbound.media（segments 兜底）转成 `[图片: url]`，
+   * 纯图片无文字时也能产出合法文本，不会因空文本返回 null 而丢失介入。
+   * 前缀主人/管理员身份——在途轮可能是回别人的，裸文本会被模型误认为是
    * 该轮发起者说的；标明介入者身份（昵称+id）让模型正确归因。
    */
   _redirectTextOf(inbound) {
-    const rawText = String(inbound.text ?? '').trim();
     const quoteSummary = inbound.extensions?.quote?.summary;
-    let t = '';
-    if (quoteSummary) {
-      t = rawText ? `${quoteSummary} ${rawText}` : quoteSummary;
-    } else {
-      t = rawText || String(inbound.content ?? '').trim();
+    let text = String(inbound.text ?? '').trim();
+    if (!text) {
+      const content = String(inbound.content ?? '').trim();
+      if (content && content !== '[图片消息]' && content !== '[文件消息]') text = content;
     }
-    if (!t) return null;
+
+    const parts = [quoteSummary, text, ...imageTokensOf(inbound)].filter(Boolean);
+    if (parts.length === 0) return null;
+    const body = parts.join(' ');
+
     const role = getIdentityRole(inbound.userId, this.config.identity);
-    if (!canIntervene(role)) return t;
+    if (!canIntervene(role)) return body;
     const name = inbound.sender?.displayName || inbound.sender?.nickname || inbound.userId;
     const ownerTitle = role === 'admin' ? '管理员' : (this.config.identity?.ownerTitle || '主人');
-    return `【${ownerTitle}介入】${name}(ID:${inbound.userId})在你回复期间补充：${t}`;
+    return `【${ownerTitle}介入】${name}(ID:${inbound.userId})在你回复期间补充：${body}`;
   }
+}
+
+/**
+ * 本条消息的图片标记。数据源是桥接标准契约：media（媒体落盘记录）优先，
+ * segments（NapCat 分段）兜底；origin === 'quote' 的图片属于被引用者，不算本条补充。
+ */
+function imageTokensOf(inbound) {
+  const own = (inbound.media ?? []).filter((m) => isImageMedia(m) && m.origin !== 'quote');
+  const items = own.length > 0
+    ? own
+    : (inbound.segments ?? [])
+        .filter((s) => s?.type === 'image' || s?.type === 'mface')
+        .map((s) => ({ url: s.data?.url, localPath: s.data?.file }));
+
+  const tokens = items.map((m) => {
+    const target = m.url || m.localPath;
+    return target ? `[图片: ${asImageUrl(target)}]` : '[图片]';
+  });
+  return [...new Set(tokens)];
+}
+
+function isImageMedia(m) {
+  return m?.kind === 'image' || m?.type === 'image';
+}
+
+/** 无协议的本地落盘路径转成 file:/// URL，模型侧工具才能直接读。 */
+function asImageUrl(target) {
+  const s = String(target);
+  return /^(https?:|data:|file:)/.test(s) ? s : `file:///${s.replace(/\\/g, '/')}`;
 }

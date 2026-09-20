@@ -78,7 +78,9 @@ export function createInboundMessage(input = {}) {
       isAtBot: input.flags?.isAtBot === true,
       isNameCall: input.flags?.isNameCall === true,
       isCommand: input.flags?.isCommand === true,
-      hasImage: input.flags?.hasImage === true,
+      hasImage:
+        input.flags?.hasImage === true ||
+        (Array.isArray(input.media) && input.media.some((m) => m?.kind === 'image' || m?.type === 'image')),
       hasFile: input.flags?.hasFile === true,
       hasQuote: input.flags?.hasQuote === true,
     },

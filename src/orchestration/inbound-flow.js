@@ -547,6 +547,10 @@ export function mergeBatch(batch) {
     content: batch.map((b) => b.inbound.content).filter(Boolean).join('\n'),
     text: batch.map((b) => b.inbound.text).filter(Boolean).join('\n'),
     media: batch.flatMap((b) => b.inbound.media ?? []),
+    flags: {
+      ...last.inbound.flags,
+      hasImage: batch.some((b) => b.inbound.flags?.hasImage === true),
+    },
     extensions: {
       ...last.inbound.extensions,
       batch: batch.map((b) => ({
