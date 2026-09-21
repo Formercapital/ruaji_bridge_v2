@@ -41,6 +41,24 @@ export function formatRateLimitEntry(entry) {
   return out;
 }
 
+/**
+ * 群聊白名单条目 → 输入框文本（与后端 formatGroupRateLimitEntry 对称）。
+ * 纯群号 = 不限速；"群号:条数" / "群号:条数:窗口毫秒" / "群号:block" = 群级频控。
+ */
+export function formatGroupRateLimitEntry(entry) {
+  if (entry == null) return '';
+  if (typeof entry !== 'object') return String(entry).trim();
+  const id = String(entry.groupId ?? entry.gid ?? entry.group ?? entry.id ?? '').trim();
+  if (!id) return '';
+  const max = Number(entry.maxReplies ?? entry.limit);
+  const win = Number(entry.windowMs ?? entry.window);
+  let out = id;
+  if (Number.isFinite(max) && max > 0) out += `:${Math.floor(max)}`;
+  if (Number.isFinite(win) && win > 0) out += `:${Math.floor(win)}`;
+  if (entry.block === true) out += ':block';
+  return out;
+}
+
 export async function api(path, options) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -1044,7 +1062,7 @@ async function renderSettings() {
   $('#cfg-wake-pattern').value = d.config.wake?.namePattern ?? '';
   $('#cfg-ratelimit-users').value = (d.config.identity?.rateLimitUsers || []).map(formatRateLimitEntry).filter(Boolean).join(', ');
   $('#cfg-private-whitelist').value = (d.config.identity?.privateWhitelist || []).join(', ');
-  $('#cfg-group-whitelist').value = (d.config.identity?.groupWhitelist || []).join(', ');
+  $('#cfg-group-whitelist').value = (d.config.identity?.groupWhitelist || []).map(formatGroupRateLimitEntry).filter(Boolean).join(', ');
 
   // 2. 表情包与视觉打标
   $('#cfg-meme-collect').checked = Boolean(d.config.meme?.autoCollect);
@@ -1130,6 +1148,8 @@ async function renderSettings() {
   $('#cfg-decision-queue-timeout-sec').value = Math.round((d.config.decision?.queueTimeout?.timeoutMs ?? 120000) / 1000);
   $('#cfg-decision-queue-timeout-notice').value = d.config.decision?.queueTimeout?.notice
     ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~';
+  $('#cfg-group-rate-limit-notice').value = d.config.decision?.groupRateLimit?.notice
+    ?? '瑞姬去休息啦，{minutes}分钟再来找她吧';
   $('#cfg-context-total-budget').value = d.config.context?.totalCharacterBudget ?? 12000;
   $('#cfg-context-source-budget').value = d.config.context?.perSourceCharacterBudget ?? 4000;
 
@@ -1269,6 +1289,9 @@ async function saveSettings() {
           enabled: $('#cfg-decision-queue-timeout-enabled').checked,
           timeoutMs: Math.round(Number($('#cfg-decision-queue-timeout-sec').value) || 120) * 1000,
           notice: $('#cfg-decision-queue-timeout-notice').value.trim(),
+        },
+        groupRateLimit: {
+          notice: $('#cfg-group-rate-limit-notice').value.trim(),
         },
       },
       context: {

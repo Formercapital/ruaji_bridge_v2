@@ -31,6 +31,11 @@
  *       "windowMs": 300000, "block": false }
  *
  * 全局默认值来自 `config.decision.rateLimit`（maxReplies / windowMs）。
+ *
+ * 群级名单（identity.groupWhitelist）复用同一套语法，只是 id 字段叫 groupId：
+ * "1076958977"（纯群号，**不限速**）、"1076958977:5"（5 分钟内最多 5 条）、
+ * "1076958977:5:300000"（单独窗口）、"1076958977:block"。群级没有全局默认额度——
+ * 想限速必须显式写条数，只写群号就保持旧行为（不限速）。
  */
 
 import { MESSAGE_TYPES } from '../contracts/messages.js';
@@ -56,24 +61,30 @@ function trimId(value) {
 }
 
 /**
- * 解析单个名单条目。
+ * 解析单个名单条目。用户 / 群共用同一套文本与对象语法，只在 id 字段名上分叉：
+ * 用户认 userId|id|uid，群认 groupId|gid|group|id。
  *
  * @param {string|number|object} entry
- * @returns {{ userId: string, maxReplies: number|null, windowMs: number|null, block: boolean }|null}
- *          无法解析（空、缺 userId）返回 null
+ * @param {string[]} idKeys 对象写法里按顺序尝试的 id 字段名
+ * @returns {{ id: string, maxReplies: number|null, windowMs: number|null, block: boolean }|null}
+ *          无法解析（空、缺 id）返回 null
  */
-export function parseRateLimitEntry(entry) {
+function parseIdLimitEntry(entry, idKeys) {
   if (entry == null || entry === '') return null;
   // 数字写法必须是正数：配置里手滑写 0 / -1 / NaN 不该变成 "用户 0"
   if (typeof entry === 'number' && !(entry > 0)) return null;
 
-  // 对象写法：{ userId|id|uid, maxReplies|limit, windowMs|window, block }
+  // 对象写法：{ userId|id|uid | groupId|gid|group, maxReplies|limit, windowMs|window, block }
   if (typeof entry === 'object' && !Array.isArray(entry)) {
-    const userId = trimId(entry.userId ?? entry.id ?? entry.uid);
-    if (!userId) return null;
+    let id = '';
+    for (const key of idKeys) {
+      id = trimId(entry[key]);
+      if (id) break;
+    }
+    if (!id) return null;
     const maxRepliesRaw = entry.maxReplies ?? entry.limit;
     return {
-      userId,
+      id,
       maxReplies: positiveIntOrNull(maxRepliesRaw),
       windowMs: positiveIntOrNull(entry.windowMs ?? entry.window),
       // maxReplies=0 的语义就是"窗口内一条都不回"，直接升格成严格拦截，
@@ -88,10 +99,10 @@ export function parseRateLimitEntry(entry) {
   if (!token) return null;
 
   const parts = token.split(':').map((s) => s.trim());
-  const userId = parts.shift();
-  if (!userId) return null;
+  const id = parts.shift();
+  if (!id) return null;
 
-  const rule = { userId, maxReplies: null, windowMs: null, block: false };
+  const rule = { id, maxReplies: null, windowMs: null, block: false };
   for (const part of parts) {
     if (!part) continue;
     if (BLOCK_TOKENS.has(part.toLowerCase())) {
@@ -112,35 +123,69 @@ export function parseRateLimitEntry(entry) {
 }
 
 /**
+ * 解析单个用户级名单条目。
+ *
+ * @param {string|number|object} entry
+ * @returns {{ userId: string, maxReplies: number|null, windowMs: number|null, block: boolean }|null}
+ */
+export function parseRateLimitEntry(entry) {
+  const rule = parseIdLimitEntry(entry, ['userId', 'id', 'uid']);
+  return rule && { userId: rule.id, maxReplies: rule.maxReplies, windowMs: rule.windowMs, block: rule.block };
+}
+
+/**
+ * 解析单个群级名单条目（identity.groupWhitelist）。
+ *
+ * @param {string|number|object} entry
+ * @returns {{ groupId: string, maxReplies: number|null, windowMs: number|null, block: boolean }|null}
+ */
+export function parseGroupRateLimitEntry(entry) {
+  const rule = parseIdLimitEntry(entry, ['groupId', 'gid', 'group', 'id']);
+  return rule && { groupId: rule.id, maxReplies: rule.maxReplies, windowMs: rule.windowMs, block: rule.block };
+}
+
+/**
  * 条目 → 文本。前端输入框与日志都用这个格式，保证 parse/format 对称。
  * @param {string|number|object} entry
  */
-export function formatRateLimitEntry(entry) {
-  const rule = parseRateLimitEntry(entry);
-  if (!rule) return '';
-  let out = rule.userId;
+function formatParsedIdLimitEntry(id, rule) {
+  let out = id;
   if (rule.maxReplies != null) out += `:${rule.maxReplies}`;
   if (rule.windowMs != null) out += `:${rule.windowMs}`;
   if (rule.block) out += ':block';
   return out;
 }
 
+export function formatRateLimitEntry(entry) {
+  const rule = parseRateLimitEntry(entry);
+  return rule ? formatParsedIdLimitEntry(rule.userId, rule) : '';
+}
+
+/** 群级条目 → 文本（与 parseGroupRateLimitEntry 对称）。 */
+export function formatGroupRateLimitEntry(entry) {
+  const rule = parseGroupRateLimitEntry(entry);
+  return rule ? formatParsedIdLimitEntry(rule.groupId, rule) : '';
+}
+
 /**
- * 规范化整份名单：解析 + 按 userId 去重（后来者覆盖，保留首次出现顺序）。
+ * 规范化整份名单：解析 + 按 id 去重（后来者覆盖，保留首次出现顺序）。
+ * 用户 / 群共用，靠 parseEntry 与 idField 分叉。
  * @param {unknown} list
- * @returns {{ userId: string, maxReplies: number|null, windowMs: number|null, block: boolean }[]}
+ * @param {(entry: unknown) => object|null} parseEntry
+ * @param {string} idField
  */
-export function normalizeRateLimitList(list) {
+function normalizeIdLimitList(list, parseEntry, idField) {
   if (!Array.isArray(list)) return [];
   /** @type {Map<string, object>} */
   const byId = new Map();
   for (const entry of list) {
-    const rule = parseRateLimitEntry(entry);
+    const rule = parseEntry(entry);
     if (!rule) continue;
-    const prev = byId.get(rule.userId);
-    byId.set(rule.userId, prev
+    const id = rule[idField];
+    const prev = byId.get(id);
+    byId.set(id, prev
       ? {
-          userId: rule.userId,
+          [idField]: id,
           maxReplies: rule.maxReplies ?? prev.maxReplies,
           windowMs: rule.windowMs ?? prev.windowMs,
           block: rule.block || prev.block,
@@ -150,20 +195,39 @@ export function normalizeRateLimitList(list) {
   return [...byId.values()];
 }
 
+export function normalizeRateLimitList(list) {
+  return normalizeIdLimitList(list, parseRateLimitEntry, 'userId');
+}
+
+/** 规范化整份群名单（identity.groupWhitelist），按 groupId 去重，后来者覆盖。 */
+export function normalizeGroupRateLimitList(list) {
+  return normalizeIdLimitList(list, parseGroupRateLimitEntry, 'groupId');
+}
+
 /**
- * 落盘/接口用的紧凑写法：只有默认额度的条目保持纯 QQ 号字符串（向后兼容旧配置文件
- * 与旧前端），带覆盖项或严格拦截的才写成对象。
- * @param {{ userId: string, maxReplies: number|null, windowMs: number|null, block: boolean }} rule
+ * 落盘/接口用的紧凑写法：只有默认额度的条目保持纯 id 字符串（向后兼容旧配置文件
+ * 与旧前端），带覆盖项或严格拦截的才写成对象。用户 / 群共用。
+ * @param {{ maxReplies: number|null, windowMs: number|null, block: boolean }} rule
+ * @param {string} idField
  * @returns {string|object}
  */
-export function toConfigRateLimitEntry(rule) {
+function toConfigIdLimitEntry(rule, idField) {
   const plain = rule.maxReplies == null && rule.windowMs == null && rule.block !== true;
-  if (plain) return rule.userId;
-  const out = { userId: rule.userId };
+  if (plain) return rule[idField];
+  const out = { [idField]: rule[idField] };
   if (rule.maxReplies != null) out.maxReplies = rule.maxReplies;
   if (rule.windowMs != null) out.windowMs = rule.windowMs;
   if (rule.block) out.block = true;
   return out;
+}
+
+export function toConfigRateLimitEntry(rule) {
+  return toConfigIdLimitEntry(rule, 'userId');
+}
+
+/** 群级规则 → 落盘/接口用的紧凑写法：只有群号（不限速）保持纯字符串。 */
+export function toConfigGroupRateLimitEntry(rule) {
+  return toConfigIdLimitEntry(rule, 'groupId');
 }
 
 /**
@@ -230,4 +294,81 @@ export function evaluateRateLimit(policy, countRecentReplies) {
   const count = countRecentReplies(policy.userId, policy.windowMs);
   if (policy.block) return { policy, limited: true, blocked: true, count };
   return { policy, limited: count >= policy.maxReplies, blocked: false, count };
+}
+
+// ===========================================================================
+// 群级频控（identity.groupWhitelist 里的 "群号:条数[:窗口毫秒]"）
+// ===========================================================================
+
+/**
+ * 在活配置里查这个群的名单规则。**每次现读** `config.identity.groupWhitelist`，
+ * 面板保存后立即生效。与用户级名单共用同一套文本/对象语法。
+ *
+ * @param {string|number} groupId
+ * @param {object} config
+ * @returns {{ groupId: string, maxReplies: number|null, windowMs: number|null, block: boolean }|null}
+ */
+export function resolveGroupRateLimitRule(groupId, config) {
+  const gid = trimId(groupId);
+  if (!gid) return null;
+  const list = config?.identity?.groupWhitelist;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  return normalizeGroupRateLimitList(list).find((rule) => rule.groupId === gid) ?? null;
+}
+
+/**
+ * 求出该群该走的具体额度。
+ *
+ * **只写群号（没写条数）→ null（完全不限速）**：群级频控没有全局默认额度，
+ * 想限速必须显式写 "群号:条数"，这样纯群号的老配置行为一字不变。
+ * 窗口可以省略，此时回落 config.decision.rateLimit.windowMs。
+ *
+ * @param {string|number} groupId
+ * @param {object} config
+ * @returns {{ groupId: string, maxReplies: number, windowMs: number, block: boolean }|null}
+ */
+export function resolveGroupRateLimitPolicy(groupId, config) {
+  const rule = resolveGroupRateLimitRule(groupId, config);
+  if (!rule) return null;
+  if (rule.maxReplies == null && rule.block !== true) return null;
+
+  const defaults = config?.decision?.rateLimit ?? {};
+  return {
+    groupId: rule.groupId,
+    // block（或 "群号:0"）＝窗口内一条都不回；非 block 时 maxReplies 必非 null
+    maxReplies: rule.maxReplies ?? 0,
+    windowMs: rule.windowMs
+      ?? positiveIntOrNull(defaults.windowMs)
+      ?? RATE_LIMIT_DEFAULTS.windowMs,
+    block: rule.block === true,
+  };
+}
+
+/**
+ * 把群级 policy 落到计数上求值，并算出还要等多久才能再回。
+ *
+ * 与用户级 evaluateRateLimit 同一套口径，但多返回一个 retryAfterMs：命中后要
+ * 等最早的 (count - maxReplies + 1) 条回复滑出窗口才重新有空位，所以冷却时间
+ * 取这批里最后一条的时间戳 + 窗口 - now。提示语据此换算出分钟数。
+ *
+ * @param {{ groupId: string, maxReplies: number, windowMs: number, block: boolean }|null} policy
+ * @param {(groupId: string, windowMs: number) => number[]} getRecentReplies 窗口内回复时间戳（乱序即可）
+ * @param {number} [now]
+ * @returns {{ policy: object|null, limited: boolean, blocked: boolean, count: number, retryAfterMs: number }}
+ */
+export function evaluateGroupRateLimit(policy, getRecentReplies, now = Date.now()) {
+  if (!policy) return { policy: null, limited: false, blocked: false, count: 0, retryAfterMs: 0 };
+  const stamps = getRecentReplies(policy.groupId, policy.windowMs) ?? [];
+  const count = stamps.length;
+  if (policy.block) {
+    return { policy, limited: true, blocked: true, count, retryAfterMs: policy.windowMs };
+  }
+  if (count < policy.maxReplies) {
+    return { policy, limited: false, blocked: false, count, retryAfterMs: 0 };
+  }
+  const sorted = [...stamps].sort((a, b) => a - b);
+  // 需要滑出窗口的是最早的 count-maxReplies+1 条，边界就是第 count-maxReplies 条
+  const boundary = sorted[count - policy.maxReplies];
+  const retryAfterMs = Math.max(0, boundary + policy.windowMs - now);
+  return { policy, limited: true, blocked: false, count, retryAfterMs };
 }

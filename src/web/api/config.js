@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { commandCatalog, normalizeAdminCommands } from '../../core/command-registry.js';
-import { normalizeRateLimitList, toConfigRateLimitEntry } from '../../core/rate-limit-policy.js';
+import { normalizeRateLimitList, toConfigRateLimitEntry, normalizeGroupRateLimitList, toConfigGroupRateLimitEntry } from '../../core/rate-limit-policy.js';
 
 /** 取正数，非法（0/负数/NaN）时回落到 fallback */
 function positiveOr(value, fallback) {
@@ -122,6 +122,10 @@ export function createConfigApi(deps) {
             timeoutMs: config.decision?.queueTimeout?.timeoutMs ?? 120000,
             notice: config.decision?.queueTimeout?.notice
               ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~',
+          },
+          groupRateLimit: {
+            notice: config.decision?.groupRateLimit?.notice
+              ?? '瑞姬去休息啦，{minutes}分钟再来找她吧',
           },
         },
         context: {
@@ -358,6 +362,27 @@ export function createConfigApi(deps) {
         }
       }
 
+      // 群聊白名单同样支持群级频控（"群号:条数[:窗口毫秒]"），逐条校验，
+      // 避免非法条目被静默写进配置后既不放行群也起不到限速作用。
+      if (Array.isArray(updates.identity?.groupWhitelist)) {
+        for (const entry of updates.identity.groupWhitelist) {
+          const [rule] = normalizeGroupRateLimitList([entry]);
+          if (!rule) {
+            errors.push(`群聊白名单条目非法: ${JSON.stringify(entry)}（应为群号，或 "群号[:条数[:窗口毫秒]][:block]"）`);
+            continue;
+          }
+          if (!/^\d{4,15}$/.test(rule.groupId)) {
+            errors.push(`群聊白名单群号非法: ${rule.groupId}（应为 4-15 位数字）`);
+          }
+          if (rule.maxReplies != null && (rule.maxReplies < 1 || rule.maxReplies > 1000)) {
+            errors.push(`群级频控额度非法: ${rule.groupId}:${rule.maxReplies}（应为 1-1000）`);
+          }
+          if (rule.windowMs != null && (rule.windowMs < 1000 || rule.windowMs > 86400000)) {
+            errors.push(`群级频控窗口非法: ${rule.groupId}:${rule.windowMs}（应为 1000 ~ 86400000 毫秒）`);
+          }
+        }
+      }
+
       if (errors.length > 0) {
         return { status: 400, body: { error: errors.join('; ') } };
       }
@@ -390,7 +415,7 @@ export function createConfigApi(deps) {
             ? updates.identity.privateWhitelist.map((u) => String(u).trim()).filter(Boolean)
             : (diskConfig.identity?.privateWhitelist || []),
           groupWhitelist: Array.isArray(updates.identity.groupWhitelist)
-            ? updates.identity.groupWhitelist.map((g) => String(g).trim()).filter(Boolean)
+            ? normalizeGroupRateLimitList(updates.identity.groupWhitelist).map(toConfigGroupRateLimitEntry)
             : (diskConfig.identity?.groupWhitelist || []),
         };
       }
@@ -492,6 +517,14 @@ export function createConfigApi(deps) {
             enabled: qt.enabled != null ? Boolean(qt.enabled) : (prev.enabled !== false),
             timeoutMs: clampInt(qt.timeoutMs, 1000, 86400000, prev.timeoutMs ?? 120000),
             notice: qt.notice ? String(qt.notice).trim().slice(0, 200) : (prev.notice ?? '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~'),
+          };
+        }
+        // 群级频控提示文案：inbound-flow 每次命中现读，落盘 + Object.assign 即热生效
+        if (updates.decision.groupRateLimit) {
+          const prev = diskConfig.decision.groupRateLimit || {};
+          const gt = updates.decision.groupRateLimit;
+          diskConfig.decision.groupRateLimit = {
+            notice: gt.notice ? String(gt.notice).trim().slice(0, 200) : (prev.notice ?? '瑞姬去休息啦，{minutes}分钟再来找她吧'),
           };
         }
       }

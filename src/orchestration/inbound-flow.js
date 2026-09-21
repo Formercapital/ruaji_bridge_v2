@@ -26,7 +26,25 @@ import { ROUTES } from '../contracts/capabilities.js';
 import { MESSAGE_TYPES, createInboundMessage } from '../contracts/messages.js';
 import { classifyError } from '../contracts/errors.js';
 import { getIdentityRole } from '../core/permission-policy.js';
-import { evaluateRateLimit, resolveRateLimitPolicy } from '../core/rate-limit-policy.js';
+import {
+  evaluateGroupRateLimit,
+  evaluateRateLimit,
+  parseGroupRateLimitEntry,
+  resolveGroupRateLimitPolicy,
+  resolveRateLimitPolicy,
+} from '../core/rate-limit-policy.js';
+
+/** 群冷却提示默认文案；{minutes} 会被换成剩余冷却分钟数（向上取整，至少 1） */
+export const GROUP_COOLDOWN_NOTICE = '瑞姬去休息啦，{minutes}分钟再来找她吧';
+
+/**
+ * 渲染群冷却提示：retryAfterMs → 分钟（向上取整，至少 1 分钟）。
+ * 纯函数，便于单测锁住"30 秒也要显示 1 分钟"这类边界。
+ */
+export function renderGroupCooldownNotice(template, retryAfterMs) {
+  const minutes = Math.max(1, Math.ceil((Number(retryAfterMs) || 0) / 60000));
+  return String(template ?? GROUP_COOLDOWN_NOTICE).replace(/\{minutes\}/g, String(minutes));
+}
 
 export class InboundFlow {
   /**
@@ -62,6 +80,24 @@ export class InboundFlow {
     return evaluateRateLimit(
       resolveRateLimitPolicy(inbound?.userId, inbound?.messageType, this.config),
       (userId, windowMs) => this.sessions.countRecentReplies(userId, windowMs),
+    );
+  }
+
+  /**
+   * 群级频控求值（与用户级共用 core/rate-limit-policy.js 的口径，现读活配置）。
+   *
+   * 只有群聊白名单条目写了额度（"群号:条数[:窗口毫秒]"）才生效；纯群号 → policy 为
+   * null（不限速）。命中时除 limited 外还带 retryAfterMs，用来在提示里换算冷却分钟。
+   */
+  _checkGroupRateLimit(inbound) {
+    if (inbound?.messageType !== MESSAGE_TYPES.GROUP) {
+      return { policy: null, limited: false, blocked: false, count: 0, retryAfterMs: 0 };
+    }
+    return evaluateGroupRateLimit(
+      resolveGroupRateLimitPolicy(inbound.groupId, this.config),
+      (groupId, windowMs) => this.sessions.getRecentGroupReplies(groupId, windowMs),
+      // 用会话存储的时钟求冷却剩余量，与计数裁剪同一时间基准（也便于测试注入假时钟）
+      this.sessions.now(),
     );
   }
 
@@ -230,6 +266,25 @@ export class InboundFlow {
       }
     }
 
+    // 群聊频控闸门：白名单条目写了额度（"群号:条数[:窗口]"）且窗口内已用满时，
+    // 不再进模型/裁决（命令已在上面处理完，管理动作不受群冷却影响；上下文滑窗
+    // 与 message.received 广播已在前面完成，冷却结束后不会丢上下文）。
+    // @ 机器人的消息回一条带剩余冷却分钟数的说明，其余静默拦截。
+    const groupLimit = this._checkGroupRateLimit(inbound);
+    if (groupLimit.limited) {
+      if (inbound.flags?.isAtBot) this._noticeGroupRateLimited(inbound, groupLimit);
+      this.health?.increment('messages', 'ignored');
+      this.log.warn(groupLimit.blocked ? '群聊频控严格拦截' : '群聊频控命中，已拦截', {
+        correlationId: inbound.correlationId,
+        groupId: inbound.groupId,
+        count: groupLimit.count,
+        limit: groupLimit.policy.maxReplies,
+        windowMs: groupLimit.policy.windowMs,
+        retryAfterMs: groupLimit.retryAfterMs,
+      });
+      return;
+    }
+
     const decision = await this.decisionFlow.decide(inbound);
     this.shadow?.record({ inbound, decision });
     this.trace?.recordDecision(inbound.correlationId, decision);
@@ -327,6 +382,23 @@ export class InboundFlow {
       this.commandFlow._reply(inbound, ack.message, '/redirect-ack');
     } catch (err) {
       this.log.warn('redirect 回执发送失败（忽略）', { correlationId: inbound.correlationId, error: err.message });
+    }
+  }
+
+  /**
+   * 群聊频控提示：额度耗尽后，@ 机器人的消息回一条带剩余冷却分钟数的说明。
+   * 与 _ackRedirect 同款：发送失败静默吞——提示只是提示，不影响限流本身。
+   */
+  _noticeGroupRateLimited(inbound, limit) {
+    const template = this.config.decision?.groupRateLimit?.notice ?? GROUP_COOLDOWN_NOTICE;
+    const text = renderGroupCooldownNotice(template, limit.retryAfterMs);
+    try {
+      this.commandFlow?._reply(inbound, text, '/group-rate-limited');
+    } catch (err) {
+      this.log.warn('群聊频控提示发送失败（忽略）', {
+        correlationId: inbound.correlationId,
+        error: err.message,
+      });
     }
   }
 
@@ -469,22 +541,37 @@ export class InboundFlow {
     // 生成前二次频控。裁决那一关是在**入队时**过的：在途生成期间排队的消息当时
     // 计数还没到阈值（典型：群聊被顶住时同一人连发三五条），等轮到它生成时限额
     // 早已用满。不在这里复核的话，"排队"就是绕过限速的正式后门。
-    // 只丢超限用户自己的排队项，其余人照常——被丢的人不占别人的位，也不会饿死别人。
+    // 群级与用户级一起复核：只丢超限的排队项，其余人照常——被丢的人不占别人的位。
     const admitted = [];
     const suppressed = [];
     for (const item of pending) {
-      if (this._checkRateLimit(item.inbound).limited) suppressed.push(item);
+      const userLimited = this._checkRateLimit(item.inbound).limited;
+      const groupLimit = this._checkGroupRateLimit(item.inbound);
+      if (userLimited || groupLimit.limited) suppressed.push({ item, groupLimit });
       else admitted.push(item);
     }
     if (suppressed.length > 0) {
-      const sample = suppressed[0].inbound;
+      const sample = suppressed[0].item.inbound;
       this.log.warn('排队期间已触发频控，排队项直接丢弃', {
         executionKey,
         userId: sample.userId,
         displayName: sample.sender?.displayName,
         dropped: suppressed.length,
       });
-      for (let i = 0; i < suppressed.length; i++) this.health?.increment('messages', 'ignored');
+      const noticedGroups = new Set();
+      for (const { item, groupLimit } of suppressed) {
+        // 排队期间才被群冷却拦下的 @ 消息也补一条提示，用户不至于觉得被无视。
+        // 同一群本轮只提示一次（合并批次里可能有多条同群消息，避免刷屏）。
+        if (
+          groupLimit.limited
+          && item.inbound.flags?.isAtBot
+          && !noticedGroups.has(groupLimit.policy.groupId)
+        ) {
+          noticedGroups.add(groupLimit.policy.groupId);
+          this._noticeGroupRateLimited(item.inbound, groupLimit);
+        }
+        this.health?.increment('messages', 'ignored');
+      }
     }
     if (admitted.length === 0) {
       // 本轮没有可回的人；排队期间可能又进来了新消息，照常调下一轮
@@ -544,6 +631,11 @@ export class InboundFlow {
         // 防止私聊回复把群聊的额度提前烧掉。windowMs 用该用户实际生效的窗口。
         const policy = resolveRateLimitPolicy(inbound.userId, inbound.messageType, this.config);
         if (policy) this.sessions.recordReply(policy.userId, policy.windowMs);
+        // 群级频控同理：只对配了额度的群计数，windowMs 用该群实际生效的窗口。
+        if (inbound.messageType === MESSAGE_TYPES.GROUP) {
+          const groupPolicy = resolveGroupRateLimitPolicy(inbound.groupId, this.config);
+          if (groupPolicy) this.sessions.recordGroupReply(groupPolicy.groupId, groupPolicy.windowMs);
+        }
         this.shadow?.recordReply({ inbound, decision, result, contextBlocks: blocks });
       }
 
@@ -619,6 +711,21 @@ export class InboundFlow {
       return { accepted: false, reason: limit.blocked ? 'blocked' : 'rate_limited' };
     }
 
+    // 群冷却期间同样不接受宿主主动接话——否则"群额度用满"被这条路径架空。
+    // 主动接话没有 @，不回提示（避免变成刷屏通道）。
+    const groupLimit = this._checkGroupRateLimit(inbound);
+    if (groupLimit.limited) {
+      this.log.warn(groupLimit.blocked ? '群聊频控严格拦截主动接话' : '群聊频控拦截主动接话', {
+        correlationId,
+        groupId,
+        count: groupLimit.count,
+        limit: groupLimit.policy.maxReplies,
+        windowMs: groupLimit.policy.windowMs,
+        retryAfterMs: groupLimit.retryAfterMs,
+      });
+      return { accepted: false, reason: groupLimit.blocked ? 'blocked' : 'rate_limited' };
+    }
+
     this._buffer(inbound, { route: ROUTES.AUTO, triggerType: 'ai_decision', reason: 'external_dispatch' });
     this._scheduleGeneration(executionKey);
     return { accepted: true };
@@ -642,13 +749,21 @@ export class InboundFlow {
    * 未配置 / 不是数组 / 空数组 = 全部群聊照常放行（完全向后兼容旧配置）；
    * 一旦填了名单，就只放行名单内的群，其余在入口处直接丢弃。
    * 群号与名单项都做 String+trim 归一化，兼容手写 JSON 时的数字写法。
+   *
+   * 条目除纯群号外还支持 "群号:条数[:窗口毫秒]"（群级频控），所以这里用
+   * parseGroupRateLimitEntry 取群号；解析不出的（例如显式空串）退回字面 trim 比较，
+   * 保持旧行为。
    */
   _isGroupAllowed(groupId) {
     const whitelist = this.config.identity?.groupWhitelist;
     if (!Array.isArray(whitelist) || whitelist.length === 0) return true;
 
     const gid = String(groupId ?? '').trim();
-    return whitelist.map((id) => String(id).trim()).includes(gid);
+    return whitelist.some((entry) => {
+      const parsed = parseGroupRateLimitEntry(entry);
+      if (parsed) return parsed.groupId === gid;
+      return String(entry ?? '').trim() === gid;
+    });
   }
 }
 

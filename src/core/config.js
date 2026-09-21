@@ -69,6 +69,14 @@ const DEFAULTS = {
       timeoutMs: 120000,
       notice: '⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~',
     },
+    /**
+     * 群级频控提示文案。额度写在 identity.groupWhitelist 的条目里
+     * （"群号:条数[:窗口毫秒]"），这里只管超额后回什么。
+     * {minutes} 会被替换成剩余冷却分钟数（向上取整，至少 1）。热生效。
+     */
+    groupRateLimit: {
+      notice: '瑞姬去休息啦，{minutes}分钟再来找她吧',
+    },
   },
   context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 5000 },
   reply: {

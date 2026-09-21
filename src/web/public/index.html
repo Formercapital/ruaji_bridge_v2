@@ -314,8 +314,8 @@
             </div>
             <div class="field-row single">
               <label>群聊白名单群号 (groupWhitelist)
-                <input type="text" id="cfg-group-whitelist" placeholder="用逗号或空格分隔多个群号，如: 10000002, 1076958977">
-                <span class="field-desc">仅处理白名单内群聊的消息，非白名单群在入口处直接拦截丢失（不进上下文、不广播）。<strong>留空即“全部群聊放行”</strong>，保持旧行为</span>
+                <input type="text" id="cfg-group-whitelist" placeholder="如: 10000002, 1076958977:5:300000">
+                <span class="field-desc">仅处理白名单内群聊的消息，非白名单群在入口处直接拦截丢失（不进上下文、不广播）。<strong>留空即“全部群聊放行”</strong>，保持旧行为。支持群级频控写法：<code>群号</code>（不限速）、<code>群号:条数</code>（窗口内最多几条）、<code>群号:条数:窗口毫秒</code>（单独窗口）、<code>群号:block</code>（永不回复）。额度用尽后 @ 瑞姬会被拦截并回一条冷却提示，修改保存后立即生效</span>
               </label>
             </div>
           </div>
@@ -673,6 +673,12 @@
               <label>超时回执文案
                 <input type="text" id="cfg-decision-queue-timeout-notice" placeholder="⏳ 刚才那条排队太久啦，先舍弃了，有需要的话再叫我一次~">
                 <span class="field-desc">舍弃排队消息时引用原消息回复的提示语</span>
+              </label>
+            </div>
+            <div class="field-row">
+              <label>群频控冷却提示文案
+                <input type="text" id="cfg-group-rate-limit-notice" placeholder="瑞姬去休息啦，{minutes}分钟再来找她吧">
+                <span class="field-desc">群额度用尽后回复 @ 者的提示语，<code>{minutes}</code> 会换成剩余冷却分钟数（向上取整）</span>
               </label>
             </div>
             <div class="field-row">

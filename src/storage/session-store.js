@@ -29,6 +29,8 @@ export class SessionStore {
     this.contextWindows = new Map();
     /** userId -> number[] 回复时间戳 */
     this.replyTimestamps = new Map();
+    /** groupId -> number[] 群级回复时间戳（群白名单频控，与用户级分开存，避免群号/QQ号串账） */
+    this.groupReplyTimestamps = new Map();
     /** executionKey -> { controller, startedAt, source, correlationId } */
     this.activeExecutions = new Map();
     /** executionKey -> { pending: [], timer } */
@@ -120,6 +122,45 @@ export class SessionStore {
   countRecentReplies(userId, windowMs = this.rateLimitWindowMs) {
     const key = String(userId);
     return this._prune(this.replyTimestamps.get(key) ?? [], windowMs).length;
+  }
+
+  /**
+   * 记录一次该群实际产生的回复（仅对配了额度的群调用）。
+   *
+   * 与用户级计数分开存：一个数字可能既是群号又是 QQ 号，共用一个 Map 会串账。
+   * windowMs 同样由调用方从 rate-limit-policy 取该群实际生效的窗口再传进来。
+   *
+   * @param {string|number} groupId
+   * @param {number} [windowMs=this.rateLimitWindowMs]
+   */
+  recordGroupReply(groupId, windowMs = this.rateLimitWindowMs) {
+    const key = String(groupId);
+    const list = this._prune(this.groupReplyTimestamps.get(key) ?? [], windowMs);
+    list.push(this.now());
+    if (list.length > MAX_REPLY_HISTORY) list.splice(0, list.length - MAX_REPLY_HISTORY);
+    this.groupReplyTimestamps.set(key, list);
+  }
+
+  /**
+   * 取窗口内该群的回复时间戳（乱序，由策略层自行排序）。
+   * **只读**——不用查询用的窗口去改写存储，与 countRecentReplies 同理。
+   *
+   * @param {string|number} groupId
+   * @param {number} [windowMs=this.rateLimitWindowMs]
+   * @returns {number[]}
+   */
+  getRecentGroupReplies(groupId, windowMs = this.rateLimitWindowMs) {
+    return this._prune(this.groupReplyTimestamps.get(String(groupId)) ?? [], windowMs);
+  }
+
+  /**
+   * 统计窗口内该群的回复条数。只读。
+   *
+   * @param {string|number} groupId
+   * @param {number} [windowMs=this.rateLimitWindowMs]
+   */
+  countRecentGroupReplies(groupId, windowMs = this.rateLimitWindowMs) {
+    return this.getRecentGroupReplies(groupId, windowMs).length;
   }
 
   _prune(list, windowMs = this.rateLimitWindowMs) {
