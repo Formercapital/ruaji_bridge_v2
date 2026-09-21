@@ -489,3 +489,133 @@ test('群频控端到端：自定义提示文案热生效，{minutes} 被替换'
   assert.equal(sent.length, 1);
   assert.equal(sent[0].text, '别催啦，3 分钟后再来~');
 });
+
+// ===========================================================================
+// 六、主人 / 管理员特权豁免（群频控门禁 + 计数双双豁免）
+// ===========================================================================
+
+test('群频控豁免：群冷却期间主人 @ 仍正常生成、不回冷却提示，且不计入群额度', async () => {
+  const clock = { t: 10_000_000 };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
+  });
+
+  // 先让普通群友把额度用满
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(generated.length, 1);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
+
+  // 冷却期内普通群友被拦
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(generated.length, 1, '普通群友仍受冷却约束');
+  assert.equal(sent.length, 1, '普通群友收到冷却提示');
+
+  // 主人 @ 必须放行：不进冷却提示、正常生成
+  await inboundFlow.handleEvent(groupEvent({ userId: '10000001' }));
+  await flush();
+  assert.equal(generated.length, 2, '主人不得被群冷却拦截');
+  assert.equal(generated[1].userId, '10000001');
+  assert.equal(sent.length, 1, '主人不该收到「瑞姬去休息啦」提示');
+  assert.equal(
+    sessionStore.countRecentGroupReplies('1076958977', 300000),
+    1,
+    '主人的成功回复不占用群额度',
+  );
+});
+
+test('群频控豁免：群冷却期间管理员 @ 仍正常生成，且不计入群额度', async () => {
+  const clock = { t: 11_000_000 };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: {
+      identity: { groupWhitelist: ['1076958977:1:300000'], adminIds: ['10000002'] },
+    },
+  });
+
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
+
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(generated.length, 1, '普通群友仍被拦');
+
+  await inboundFlow.handleEvent(groupEvent({ userId: '10000002' }));
+  await flush();
+  assert.equal(generated.length, 2, '管理员不得被群冷却拦截');
+  assert.equal(generated[1].userId, '10000002');
+  assert.equal(sent.length, 1, '管理员不该收到冷却提示');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1, '管理员回复不计数');
+});
+
+test('群频控豁免：主人连发多条始终不产生群级计数（纯计数豁免，不依赖冷却状态）', async () => {
+  const clock = { t: 12_000_000 };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:2:300000'] } },
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await inboundFlow.handleEvent(groupEvent({ userId: '10000001' }));
+    await flush();
+  }
+
+  assert.equal(generated.length, 3, '主人不受额度 2 的限制');
+  assert.equal(sent.length, 0);
+  assert.equal(
+    sessionStore.countRecentGroupReplies('1076958977', 300000),
+    0,
+    '主人回复一条都不该计入群额度',
+  );
+});
+
+test('群频控豁免：冷却期间宿主的主动接话（主人身份）也被放行', async () => {
+  const clock = { t: 13_000_000 };
+  const { sessionStore, inboundFlow, generated } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
+  });
+
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(generated.length, 1);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
+
+  const accepted = await inboundFlow.handleProactive({
+    groupId: '1076958977', userId: '10000001', nickname: '主人', message: '在吗',
+  });
+  assert.equal(accepted.accepted, true, '主人的主动接话不受群冷却约束');
+  await flush();
+  assert.equal(generated.length, 2);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1, '主动接话也不计数');
+});
+
+test('群频控豁免：生成前排队复核处主人也不被丢弃（额度在排队期间才用满）', async () => {
+  const clock = { t: 14_000_000 };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
+  });
+
+  const key = 'group_1076958977';
+  const controller = new AbortController();
+  sessionStore.beginExecution(key, { controller, source: 'direct' });
+
+  // 在途期间主人这条只能排队——此刻群计数还是 0，闸门会放行
+  await inboundFlow.handleEvent(groupEvent({ userId: '10000001' }));
+  await flush();
+  assert.equal(sessionStore.getBuffer(key).pending.length, 1);
+
+  // 排队期间额度被普通群友用满，然后放开在途轮
+  sessionStore.recordGroupReply('1076958977', 300000);
+  sessionStore.endExecution(key, controller);
+
+  await inboundFlow._runGeneration(key);
+  assert.equal(generated.length, 1, '生成前复核不得丢弃主人的排队项');
+  assert.equal(generated[0].userId, '10000001');
+  assert.equal(sessionStore.getBuffer(key).pending.length, 0);
+  assert.equal(sent.length, 0, '主人不该收到冷却提示');
+});

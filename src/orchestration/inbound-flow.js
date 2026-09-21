@@ -84,13 +84,31 @@ export class InboundFlow {
   }
 
   /**
+   * 主人 / 管理员特权豁免：群级频控只约束普通群友。
+   *
+   * 主人或管理员在群里发言不该被 "该群额度用满" 挡住，也不该挤占群额度
+   * （计数豁免见 _runGeneration 里的 recordGroupReply 分支）。判定取规范化后的
+   * flags——入站、生成前复核、主动接话三条路径共用同一份，口径天然一致。
+   */
+  _isGroupRateLimitExempt(inbound) {
+    return inbound?.flags?.isOwner === true || inbound?.flags?.isAdmin === true;
+  }
+
+  /**
    * 群级频控求值（与用户级共用 core/rate-limit-policy.js 的口径，现读活配置）。
    *
    * 只有群聊白名单条目写了额度（"群号:条数[:窗口毫秒]"）才生效；纯群号 → policy 为
    * null（不限速）。命中时除 limited 外还带 retryAfterMs，用来在提示里换算冷却分钟。
+   *
+   * 主人 / 管理员直接返回未命中——豁免在这一处收口，入站闸门、生成前复核
+   * （_runGeneration）与主动接话（handleProactive）三条路径全都自动放行，
+   * 也不会走到 _noticeGroupRateLimited 的冷却提示。
    */
   _checkGroupRateLimit(inbound) {
     if (inbound?.messageType !== MESSAGE_TYPES.GROUP) {
+      return { policy: null, limited: false, blocked: false, count: 0, retryAfterMs: 0 };
+    }
+    if (this._isGroupRateLimitExempt(inbound)) {
       return { policy: null, limited: false, blocked: false, count: 0, retryAfterMs: 0 };
     }
     return evaluateGroupRateLimit(
@@ -632,7 +650,9 @@ export class InboundFlow {
         const policy = resolveRateLimitPolicy(inbound.userId, inbound.messageType, this.config);
         if (policy) this.sessions.recordReply(policy.userId, policy.windowMs);
         // 群级频控同理：只对配了额度的群计数，windowMs 用该群实际生效的窗口。
-        if (inbound.messageType === MESSAGE_TYPES.GROUP) {
+        // 主人 / 管理员豁免计数——他们的回复不占用群额度，否则特权放行仍会把
+        // 群友的额度烧光（门禁豁免与计数豁免必须成对）。
+        if (inbound.messageType === MESSAGE_TYPES.GROUP && !this._isGroupRateLimitExempt(inbound)) {
           const groupPolicy = resolveGroupRateLimitPolicy(inbound.groupId, this.config);
           if (groupPolicy) this.sessions.recordGroupReply(groupPolicy.groupId, groupPolicy.windowMs);
         }
