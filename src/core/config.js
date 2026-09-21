@@ -14,7 +14,7 @@ import { ConfigError } from '../contracts/errors.js';
 
 const DEFAULTS = {
   mode: 'live',
-  identity: { ownerId: '', adminIds: [], adminCommands: [], robotId: '', botName: '瑞姬', ownerTitle: '主人', rateLimitUsers: [], privateWhitelist: [] },
+  identity: { ownerId: '', adminIds: [], adminCommands: [], robotId: '', botName: '瑞姬', ownerTitle: '主人', rateLimitUsers: [], privateWhitelist: [], groupWhitelist: [] },
   napcat: {
     wsUrl: 'ws://127.0.0.1:3001',
     httpUrl: 'http://127.0.0.1:3000',
@@ -40,7 +40,14 @@ const DEFAULTS = {
   wake: { mode: 'both', namePattern: '(^|[\\s，,。.!！?？~、；;:：])瑞姬' },
   decision: {
     capability: 'decision.group_reply',
-    rateLimit: { maxReplies: 5, windowMs: 300000 },
+    /**
+     * 频控（限速名单）默认额度：名单内用户在 windowMs 内最多回 maxReplies 条，
+     * 超出静默忽略。名单条目可在 identity.rateLimitUsers 里写
+     * "QQ号:条数[:窗口毫秒]" / "QQ号:block" 覆盖这两项全局默认值。
+     * applyToPrivate 默认 false：私聊本来就过白名单门禁，不把频控顺带压上去。
+     * 以上字段全部热生效（core/rate-limit-policy.js 每次现读 config）。
+     */
+    rateLimit: { maxReplies: 5, windowMs: 300000, applyToPrivate: false },
     debounceMs: 800,
     localWindowSize: 15,
     localWindowInject: 6,

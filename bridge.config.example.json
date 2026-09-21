@@ -11,8 +11,14 @@
     "robotId": "11111111",
     "botName": "BOT_NAME",
     "ownerTitle": "主人",
-    "rateLimitUsers": ["10000002"],
-    "privateWhitelist": ["10000001", "10000003"]
+    "rateLimitUsers": [
+      "10000002",
+      "10000003:2",
+      "10000004:2:600000",
+      "10000005:block"
+    ],
+    "privateWhitelist": ["10000001", "10000003"],
+    "groupWhitelist": ["10000002"]
   },
 
   "napcat": {
@@ -46,7 +52,7 @@
 
   "decision": {
     "capability": "decision.group_reply",
-    "rateLimit": { "maxReplies": 5, "windowMs": 300000 },
+    "rateLimit": { "maxReplies": 5, "windowMs": 300000, "applyToPrivate": false },
     "debounceMs": 800,
     "localWindowSize": 15,
     "localWindowInject": 6,

@@ -71,6 +71,55 @@ test('administrator command settings round-trip, hot apply, reject sensitive gra
   });
 });
 
+test('群聊白名单可在面板读写并热生效', async () => {
+  await withPanel({}, async ({ container, base, get }) => {
+    const initial = (await get('/api/config')).body;
+    assert.deepEqual(initial.config.identity.groupWhitelist, [], '默认空名单＝全部群放行');
+
+    const put = (identity) => fetch(`${base}/api/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity }),
+    });
+    const identity = { ...initial.config.identity, groupWhitelist: ['1076958977', 888888888] };
+
+    assert.equal((await put(identity)).status, 200);
+    assert.deepEqual(
+      container.config.identity.groupWhitelist,
+      ['1076958977', '888888888'],
+      '运行态应当立即生效，并且数字项归一化成字符串',
+    );
+
+    const reloaded = (await get('/api/config')).body;
+    assert.deepEqual(reloaded.config.identity.groupWhitelist, ['1076958977', '888888888']);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(container.config.paths.configFile, 'utf8')).identity.groupWhitelist,
+      ['1076958977', '888888888'],
+      '重启后仍保留群聊白名单',
+    );
+
+    // 清空名单＝恢复全部放行，同样应立即生效
+    assert.equal((await put({ ...identity, groupWhitelist: [] })).status, 200);
+    const cleared = (await get('/api/config')).body;
+    assert.deepEqual(cleared.config.identity.groupWhitelist, []);
+    assert.deepEqual(container.config.identity.groupWhitelist, []);
+    assert.equal(
+      cleared.config.identity.ownerId,
+      initial.config.identity.ownerId,
+      '同一次 PUT 不应丢掉其它 identity 字段',
+    );
+  });
+});
+
+test('面板前端暴露群聊白名单输入框并接入保存载荷', async () => {
+  await withPanel({}, async ({ base }) => {
+    const html = await (await fetch(`${base}/`)).text();
+    assert.match(html, /id="cfg-group-whitelist"/, '首页应有群聊白名单输入框');
+
+    const appJs = await (await fetch(`${base}/app.js`)).text();
+    assert.ok(appJs.includes('#cfg-group-whitelist'), '前端应读写该输入框');
+    assert.match(appJs, /groupWhitelist/, '保存载荷应带上 groupWhitelist');
+  });
+});
+
 test('静态首页与前端资源可访问', async () => {
   await withPanel({}, async ({ base }) => {
     const html = await fetch(`${base}/`);

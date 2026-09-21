@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { commandCatalog, normalizeAdminCommands } from '../../core/command-registry.js';
+import { normalizeRateLimitList, toConfigRateLimitEntry } from '../../core/rate-limit-policy.js';
 
 /** 取正数，非法（0/负数/NaN）时回落到 fallback */
 function positiveOr(value, fallback) {
@@ -73,6 +74,9 @@ export function createConfigApi(deps) {
           privateWhitelist: Array.isArray(config.identity?.privateWhitelist)
             ? [...config.identity.privateWhitelist]
             : [],
+          groupWhitelist: Array.isArray(config.identity?.groupWhitelist)
+            ? [...config.identity.groupWhitelist]
+            : [],
         },
         napcat: {
           wsUrl: config.napcat?.wsUrl ?? 'ws://127.0.0.1:3001',
@@ -108,6 +112,7 @@ export function createConfigApi(deps) {
           rateLimit: {
             maxReplies: config.decision?.rateLimit?.maxReplies ?? 5,
             windowMs: config.decision?.rateLimit?.windowMs ?? 300000,
+            applyToPrivate: config.decision?.rateLimit?.applyToPrivate === true,
           },
           debounceMs: config.decision?.debounceMs ?? 800,
           localWindowSize: config.decision?.localWindowSize ?? 15,
@@ -323,6 +328,34 @@ export function createConfigApi(deps) {
         if (qt?.timeoutMs != null && (Number(qt.timeoutMs) < 1000 || Number(qt.timeoutMs) > 86400000)) {
           errors.push(`排队超时时长 非法: ${qt.timeoutMs}（应为 1 秒 ~ 24 小时对应的毫秒数）`);
         }
+        const rl = updates.decision.rateLimit;
+        if (rl?.maxReplies != null && (!Number.isInteger(Number(rl.maxReplies)) || Number(rl.maxReplies) < 1 || Number(rl.maxReplies) > 1000)) {
+          errors.push(`频控上限 非法: ${rl.maxReplies}（应为 1-1000 的整数）`);
+        }
+        if (rl?.windowMs != null && (!Number.isInteger(Number(rl.windowMs)) || Number(rl.windowMs) < 1000 || Number(rl.windowMs) > 86400000)) {
+          errors.push(`频控窗口 非法: ${rl.windowMs}（应为 1000 ~ 86400000 毫秒）`);
+        }
+      }
+
+      // 频控名单：每一条都要能解析出合法 userId；单独额度/窗口也逐个校验。
+      // 以前这里只做 String+trim，非法条目会被静默写进配置，运行期永远匹配不上。
+      if (Array.isArray(updates.identity?.rateLimitUsers)) {
+        for (const entry of updates.identity.rateLimitUsers) {
+          const [rule] = normalizeRateLimitList([entry]);
+          if (!rule) {
+            errors.push(`频控名单条目非法: ${JSON.stringify(entry)}（应为 QQ 号，或 "QQ号[:条数[:窗口毫秒]][:block]"）`);
+            continue;
+          }
+          if (!/^\d{4,15}$/.test(rule.userId)) {
+            errors.push(`频控名单 QQ 号非法: ${rule.userId}（应为 4-15 位数字）`);
+          }
+          if (rule.maxReplies != null && (rule.maxReplies < 1 || rule.maxReplies > 1000)) {
+            errors.push(`频控名单单独额度非法: ${rule.userId}:${rule.maxReplies}（应为 1-1000）`);
+          }
+          if (rule.windowMs != null && (rule.windowMs < 1000 || rule.windowMs > 86400000)) {
+            errors.push(`频控名单单独窗口非法: ${rule.userId}:${rule.windowMs}（应为 1000 ~ 86400000 毫秒）`);
+          }
+        }
       }
 
       if (errors.length > 0) {
@@ -347,12 +380,18 @@ export function createConfigApi(deps) {
             updates.identity.ownerTitle !== undefined
               ? (String(updates.identity.ownerTitle).trim().slice(0, 30) || '主人')
               : (diskConfig.identity?.ownerTitle || '主人'),
+          // 名单条目支持纯 QQ 号 / "id:条数" / "id:条数:窗口毫秒" / "id:block" 文本写法，
+          // 也支持配置文件里的对象写法。统一解析后：带覆盖项或严格拦截的存对象，
+          // 仅用全局默认额度的仍存字符串（旧配置文件、旧前端完全向后兼容）。
           rateLimitUsers: Array.isArray(updates.identity.rateLimitUsers)
-            ? updates.identity.rateLimitUsers.map((u) => String(u).trim()).filter(Boolean)
+            ? normalizeRateLimitList(updates.identity.rateLimitUsers).map(toConfigRateLimitEntry)
             : (diskConfig.identity?.rateLimitUsers || []),
           privateWhitelist: Array.isArray(updates.identity.privateWhitelist)
             ? updates.identity.privateWhitelist.map((u) => String(u).trim()).filter(Boolean)
             : (diskConfig.identity?.privateWhitelist || []),
+          groupWhitelist: Array.isArray(updates.identity.groupWhitelist)
+            ? updates.identity.groupWhitelist.map((g) => String(g).trim()).filter(Boolean)
+            : (diskConfig.identity?.groupWhitelist || []),
         };
       }
 
@@ -439,6 +478,10 @@ export function createConfigApi(deps) {
             ...(diskConfig.decision?.rateLimit || {}),
             maxReplies: updates.decision.rateLimit?.maxReplies != null ? Number(updates.decision.rateLimit.maxReplies) : (diskConfig.decision?.rateLimit?.maxReplies ?? 5),
             windowMs: updates.decision.rateLimit?.windowMs != null ? Number(updates.decision.rateLimit.windowMs) : (diskConfig.decision?.rateLimit?.windowMs ?? 300000),
+            // 默认 false：私聊本来就要过白名单门禁，不把频控顺带压到私聊上
+            applyToPrivate: updates.decision.rateLimit?.applyToPrivate != null
+              ? Boolean(updates.decision.rateLimit.applyToPrivate)
+              : (diskConfig.decision?.rateLimit?.applyToPrivate === true),
           },
         };
         // 排队超时：巡检器每次 tick 现读 config.decision.queueTimeout，落盘 + Object.assign 即热生效
@@ -546,6 +589,12 @@ export function createConfigApi(deps) {
         Object.assign(config.decision, diskConfig.decision);
         if (sessionStore && diskConfig.decision.localWindowSize) {
           sessionStore.windowSize = diskConfig.decision.localWindowSize;
+        }
+        // 频控窗口在 SessionStore 构造时取过一次，必须推给活着的实例，
+        // 否则面板改窗口是"保存成功但不生效"。阈值/名单/严格拦截都由
+        // core/rate-limit-policy.js 现读 config，不需要额外同步。
+        if (sessionStore && diskConfig.decision.rateLimit?.windowMs) {
+          sessionStore.rateLimitWindowMs = Number(diskConfig.decision.rateLimit.windowMs);
         }
       }
       if (diskConfig.model?.sessionCutoffHour != null) {

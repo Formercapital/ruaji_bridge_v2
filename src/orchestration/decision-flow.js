@@ -18,14 +18,19 @@
  * 保留的行为：
  *   - GCP 不可用时降级为"真 @ 兜底"
  *   - route 为 duplicate/none/空 一律当 ignore
- *   - 限流名单 5 次 / 5 分钟窗口，静默忽略
+ *   - 限流名单默认 5 次 / 5 分钟滑动窗口，静默忽略
  *   - 主人打断特权、群友排队（附录 1）
+ *
+ * 频控（2026-09 修复）不在本文件里各自维护名单：名单解析与额度合并全部交给
+ * core/rate-limit-policy.js，且**每次裁决现读活配置**。构造期把名单快照成 Set
+ * 会让面板保存的改动静默失效——这正是"明明在 rateLimitUsers 里却不限速"的根因之一。
  */
 
 import { CAPABILITIES, ROUTES, TRIGGER_TYPES, normalizeRoute } from '../contracts/capabilities.js';
 import { canIntervene, getIdentityRole } from '../core/permission-policy.js';
 import { MESSAGE_TYPES } from '../contracts/messages.js';
 import { PreemptedError } from '../contracts/errors.js';
+import { evaluateRateLimit, resolveRateLimitPolicy } from '../core/rate-limit-policy.js';
 
 export const IGNORE_REASONS = Object.freeze({
   NOT_WOKEN: 'not_woken',
@@ -49,7 +54,6 @@ export class DecisionFlow {
     this.normalizer = opts.normalizer;
     this.config = opts.config;
     this.log = opts.logger?.child({ component: 'decision-flow' }) ?? console;
-    this.rateLimitUsers = new Set((opts.config.identity.rateLimitUsers ?? []).map(String));
     /** @see arbitrateConcurrency 的 redirect 分支 */
     this.modelRouter = opts.modelRouter ?? null;
     this.fetch = opts.fetchImpl ?? fetch;
@@ -62,8 +66,17 @@ export class DecisionFlow {
    * @returns {Promise<{ route: string, triggerType: string, reason: string, providerId: string|null }>}
    */
   async decide(inbound, ctx = {}) {
-    // 私聊恒 direct
+    // 频控闸门先算出来（现读活配置）。它必须在私聊早退之前——否则私聊永远绕过限速；
+    // 也要在群聊 route 求出之后二次应用（provider 调用是只读的，照旧让它把这条消息
+    // 写进 GCP 滑窗，只是不再回）。
+    const limit = this.checkRateLimit(inbound);
+
+    // 私聊恒 direct（除非主人显式把频控也用在私聊上）
     if (inbound.messageType === MESSAGE_TYPES.PRIVATE) {
+      if (limit.limited) {
+        this._logRateLimitHit(inbound, limit);
+        return this._result(ROUTES.IGNORE, TRIGGER_TYPES.AT, IGNORE_REASONS.RATE_LIMITED, null, inbound);
+      }
       return this._result(ROUTES.DIRECT, TRIGGER_TYPES.AT, 'private_message', null, inbound);
     }
 
@@ -114,7 +127,8 @@ export class DecisionFlow {
     }
 
     // 限流：只对名单内用户生效，防止 AI 与 AI 互相回复把 token 轰上天
-    if (route !== ROUTES.IGNORE && this._isRateLimited(inbound)) {
+    if (route !== ROUTES.IGNORE && limit.limited) {
+      this._logRateLimitHit(inbound, limit);
       return this._result(ROUTES.IGNORE, triggerType, IGNORE_REASONS.RATE_LIMITED, decision?.providerId ?? null, inbound);
     }
 
@@ -154,22 +168,55 @@ export class DecisionFlow {
     });
   }
 
+  /**
+   * 这个用户当前走哪套额度。不在名单 / 私聊未启用频控 → null。
+   * 每次现读 config，面板保存后即时生效（不需要重启，也不需要推送活实例）。
+   *
+   * @param {object} inbound
+   * @returns {{ userId: string, maxReplies: number, windowMs: number, block: boolean }|null}
+   */
+  rateLimitPolicyFor(inbound) {
+    return resolveRateLimitPolicy(inbound?.userId, inbound?.messageType, this.config);
+  }
+
+  /**
+   * 判定该条消息是否应被频控静默忽略。
+   *
+   * 判定口径统一在 core/rate-limit-policy.js（阈值、窗口、严格拦截），
+   * 本方法只负责把活配置与 SessionStore 接起来。入站层与生成层都调它，
+   * 保证"入队时"与"真正生成时"用的是同一把尺子。
+   *
+   * @param {object} inbound
+   * @returns {{ policy: object|null, limited: boolean, blocked: boolean, count: number }}
+   */
+  checkRateLimit(inbound) {
+    return evaluateRateLimit(
+      this.rateLimitPolicyFor(inbound),
+      (userId, windowMs) => this.sessions.countRecentReplies(userId, windowMs),
+    );
+  }
+
+  /**
+   * @deprecated 保留旧调用点与旧测试的兼容包装，新代码请用 checkRateLimit()。
+   * @param {object} inbound
+   * @returns {boolean}
+   */
   _isRateLimited(inbound) {
-    const userId = String(inbound.userId);
-    if (!this.rateLimitUsers.has(userId)) return false;
+    return this.checkRateLimit(inbound).limited;
+  }
 
-    const count = this.sessions.countRecentReplies(userId);
-    const limit = this.config.decision.rateLimit.maxReplies;
-    if (count < limit) return false;
-
-    this.log.warn('限流命中，静默忽略', {
+  _logRateLimitHit(inbound, limit) {
+    const { policy, count, blocked } = limit;
+    this.log.warn(blocked ? '严格拦截命中，静默忽略' : '限流命中，静默忽略', {
       correlationId: inbound.correlationId,
-      userId,
-      displayName: inbound.sender.displayName,
+      userId: policy.userId,
+      displayName: inbound.sender?.displayName,
+      messageType: inbound.messageType,
       count,
-      limit,
+      limit: policy.maxReplies,
+      windowMs: policy.windowMs,
+      block: blocked,
     });
-    return true;
   }
 
   _result(route, triggerType, reason, providerId, inbound) {

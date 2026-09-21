@@ -302,14 +302,20 @@
             </div>
             <div class="field-row single">
               <label>频控名单用户 (rateLimitUsers)
-                <input type="text" id="cfg-ratelimit-users" placeholder="用逗号或空格分隔多个 QQ 号">
-                <span class="field-desc">限制触发频率的用户 QQ，超出 5 分钟 5 次限制后静默忽略</span>
+                <input type="text" id="cfg-ratelimit-users" placeholder="3443746455, 2416406494:2, 3768463847:block">
+                <span class="field-desc">名单内用户的回复频率受限，超限静默忽略。写法：<code>QQ号</code>（用全局额度）、<code>QQ号:条数</code>（单独额度）、<code>QQ号:条数:窗口毫秒</code>（单独窗口）、<code>QQ号:block</code>（严格拦截，永不回复）。修改保存后立即生效</span>
               </label>
             </div>
             <div class="field-row single">
               <label>私聊白名单用户 (privateWhitelist)
                 <input type="text" id="cfg-private-whitelist" placeholder="用逗号或空格分隔多个 QQ 号，如: 10000001, 10000003">
                 <span class="field-desc">仅允许白名单内的 QQ 用户私聊触发机器人（主人默认恒放行），非白名单在入口处直接拦截丢弃。<strong>留空即“仅主人可私聊”</strong>，不是关闭此功能</span>
+              </label>
+            </div>
+            <div class="field-row single">
+              <label>群聊白名单群号 (groupWhitelist)
+                <input type="text" id="cfg-group-whitelist" placeholder="用逗号或空格分隔多个群号，如: 10000002, 1076958977">
+                <span class="field-desc">仅处理白名单内群聊的消息，非白名单群在入口处直接拦截丢失（不进上下文、不广播）。<strong>留空即“全部群聊放行”</strong>，保持旧行为</span>
               </label>
             </div>
           </div>
@@ -636,17 +642,22 @@
               </label>
               <label>决策限流窗口 (毫秒)
                 <input type="number" id="cfg-decision-window" placeholder="300000">
-                <span class="field-desc">群聊主动接话的滑动时间窗口</span>
+                <span class="field-desc">频控名单的默认滑动时间窗口（可被名单条目里的单独窗口覆盖）</span>
               </label>
             </div>
             <div class="field-row">
               <label>窗口内最大回复条数
                 <input type="number" id="cfg-decision-max-replies" placeholder="5">
-                <span class="field-desc">防止群内接话过频的硬上限</span>
+                <span class="field-desc">频控名单的默认上限（可被名单条目里的单独额度覆盖）</span>
               </label>
               <label>本地群滑窗缓存大小 (条数)
                 <input type="number" id="cfg-decision-window-size" placeholder="15">
                 <span class="field-desc">保留最近多少条群聊消息作为上下文</span>
+              </label>
+            </div>
+            <div class="field-row-checks">
+              <label class="check">
+                <input type="checkbox" id="cfg-decision-ratelimit-private"> 频控也作用于私聊（默认关闭：私聊本就需白名单显式放行）
               </label>
             </div>
             <div class="field-row-checks">

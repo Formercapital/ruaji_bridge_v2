@@ -20,6 +20,27 @@ export function esc(value) {
   })[c]);
 }
 
+/**
+ * 频控名单条目 → 输入框文本。
+ *
+ * 与后端 core/rate-limit-policy.js 的 formatRateLimitEntry 保持对称：
+ * 纯默认额度是 `QQ号`，带覆盖项是 `QQ号:条数` / `QQ号:条数:窗口毫秒`，
+ * 严格拦截是 `QQ号:block`。对象写法只在配置文件里出现，面板展示时展开成文本。
+ */
+export function formatRateLimitEntry(entry) {
+  if (entry == null) return '';
+  if (typeof entry !== 'object') return String(entry).trim();
+  const id = String(entry.userId ?? entry.id ?? '').trim();
+  if (!id) return '';
+  const max = Number(entry.maxReplies ?? entry.limit);
+  const win = Number(entry.windowMs ?? entry.window);
+  let out = id;
+  if (Number.isFinite(max) && max > 0) out += `:${Math.floor(max)}`;
+  if (Number.isFinite(win) && win > 0) out += `:${Math.floor(win)}`;
+  if (entry.block === true) out += ':block';
+  return out;
+}
+
 export async function api(path, options) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -1021,8 +1042,9 @@ async function renderSettings() {
   $('#cfg-owner-title').value = d.config.identity?.ownerTitle ?? '主人';
   $('#cfg-wake-mode').value = d.config.wake?.mode ?? 'both';
   $('#cfg-wake-pattern').value = d.config.wake?.namePattern ?? '';
-  $('#cfg-ratelimit-users').value = (d.config.identity?.rateLimitUsers || []).join(', ');
+  $('#cfg-ratelimit-users').value = (d.config.identity?.rateLimitUsers || []).map(formatRateLimitEntry).filter(Boolean).join(', ');
   $('#cfg-private-whitelist').value = (d.config.identity?.privateWhitelist || []).join(', ');
+  $('#cfg-group-whitelist').value = (d.config.identity?.groupWhitelist || []).join(', ');
 
   // 2. 表情包与视觉打标
   $('#cfg-meme-collect').checked = Boolean(d.config.meme?.autoCollect);
@@ -1102,6 +1124,7 @@ async function renderSettings() {
   $('#cfg-decision-debounce').value = d.config.decision?.debounceMs ?? 800;
   $('#cfg-decision-window').value = d.config.decision?.rateLimit?.windowMs ?? 300000;
   $('#cfg-decision-max-replies').value = d.config.decision?.rateLimit?.maxReplies ?? 5;
+  $('#cfg-decision-ratelimit-private').checked = d.config.decision?.rateLimit?.applyToPrivate === true;
   $('#cfg-decision-window-size').value = d.config.decision?.localWindowSize ?? 15;
   $('#cfg-decision-queue-timeout-enabled').checked = d.config.decision?.queueTimeout?.enabled !== false;
   $('#cfg-decision-queue-timeout-sec').value = Math.round((d.config.decision?.queueTimeout?.timeoutMs ?? 120000) / 1000);
@@ -1144,6 +1167,12 @@ async function saveSettings() {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const rawGroupWhitelist = $('#cfg-group-whitelist').value;
+    const groupWhitelist = rawGroupWhitelist
+      .split(/[,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const rawFastAckPatterns = $('#cfg-fastack-patterns').value;
     const fastAckPatterns = rawFastAckPatterns
       .split('\n')
@@ -1173,6 +1202,7 @@ async function saveSettings() {
         ownerTitle: $('#cfg-owner-title').value.trim(),
         rateLimitUsers,
         privateWhitelist,
+        groupWhitelist,
       },
       wake: {
         mode: $('#cfg-wake-mode').value,
@@ -1233,6 +1263,7 @@ async function saveSettings() {
         rateLimit: {
           maxReplies: Number($('#cfg-decision-max-replies').value) || 5,
           windowMs: Number($('#cfg-decision-window').value) || 300000,
+          applyToPrivate: $('#cfg-decision-ratelimit-private')?.checked === true,
         },
         queueTimeout: {
           enabled: $('#cfg-decision-queue-timeout-enabled').checked,

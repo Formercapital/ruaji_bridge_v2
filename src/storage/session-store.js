@@ -4,6 +4,10 @@
  * 承载三件旧 Bridge 用全局变量维护的东西：
  *   groupContextBuffer   群聊滑窗（bridge.js:23）
  *   consecutiveReplies   限流窗口（bridge.js:27）
+ *
+ * 频控采用的是**滑动窗口计数**：记下每次实际回复的时刻，判定时只看窗口内剩几条。
+ * 阈值与窗口本身不在这里决定——那是 core/rate-limit-policy.js 的职责，本类
+ * 只负责时间戳的存取（并按调用方给的窗口裁剪）。
  *   activeControllers    在途生成与打断（bridge.js:408, 1731-1739）
  *
  * 全部按 sessionId / executionKey 隔离，不再是模块级可变全局。
@@ -87,23 +91,39 @@ export class SessionStore {
 
   // ===== 限流 =====
 
-  /** 记录一次实际回复（仅对限流名单内的用户调用） */
-  recordReply(userId) {
+  /**
+   * 记录一次实际回复（仅对命中频控名单的用户调用）。
+   *
+   * windowMs 允许按用户覆盖（名单条目可以带自己的窗口）：调用方从
+   * rate-limit-policy 拿到该用户实际生效的窗口再传进来，避免"全局窗口
+   * 改了但某个用户的单独窗口没跟着改"。
+   *
+   * @param {string|number} userId
+   * @param {number} [windowMs=this.rateLimitWindowMs]
+   */
+  recordReply(userId, windowMs = this.rateLimitWindowMs) {
     const key = String(userId);
-    const list = this.replyTimestamps.get(key) ?? [];
+    const list = this._prune(this.replyTimestamps.get(key) ?? [], windowMs);
     list.push(this.now());
-    this.replyTimestamps.set(key, this._prune(list));
-  }
-
-  countRecentReplies(userId) {
-    const key = String(userId);
-    const list = this._prune(this.replyTimestamps.get(key) ?? []);
+    // 兜底上限：窗口被配得很大（例如 24h）又持续刷屏时不让数组无限长
+    if (list.length > MAX_REPLY_HISTORY) list.splice(0, list.length - MAX_REPLY_HISTORY);
     this.replyTimestamps.set(key, list);
-    return list.length;
   }
 
-  _prune(list) {
-    const cutoff = this.now() - this.rateLimitWindowMs;
+  /**
+   * 统计窗口内的回复条数。**只读**——不用查询用的窗口去改写存储，
+   * 否则同一份时间戳被两个不同窗口先后查询时会互相截断。
+   *
+   * @param {string|number} userId
+   * @param {number} [windowMs=this.rateLimitWindowMs]
+   */
+  countRecentReplies(userId, windowMs = this.rateLimitWindowMs) {
+    const key = String(userId);
+    return this._prune(this.replyTimestamps.get(key) ?? [], windowMs).length;
+  }
+
+  _prune(list, windowMs = this.rateLimitWindowMs) {
+    const cutoff = this.now() - (windowMs > 0 ? windowMs : this.rateLimitWindowMs);
     return list.filter((t) => t > cutoff);
   }
 
@@ -233,6 +253,9 @@ export class SessionStore {
     }
   }
 }
+
+/** 单个用户保留的回复时间戳上限，防极端刷屏 + 超大窗口把内存撑爆 */
+const MAX_REPLY_HISTORY = 500;
 
 function formatClock(ts) {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });

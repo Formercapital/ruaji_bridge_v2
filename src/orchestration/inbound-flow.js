@@ -2,7 +2,7 @@
  * orchestration/inbound-flow.js — 入站主链路
  *
  * 顺序（每一步的位置都有理由）：
- *   0. 私聊白名单门禁   非白名单私聊在规范化**之前**丢弃（媒体不落盘、不发 NapCat 请求）
+ *   0. 白名单门禁     非白名单私聊 / 非白名单群聊在规范化**之前**丢弃（媒体不落盘、不发 NapCat 请求）
  *   1. 规范化           NapCat 原始事件 → InboundMessage
  *   2. 去重             相同 messageId 只处理一次
  *   3. 记入滑窗         **在裁决之前**——被忽略的消息也要进上下文
@@ -10,8 +10,9 @@
  *   5. 命令拦截         命令不发给模型
  *   6. 裁决             direct / auto / ignore
  *   7. 并发仲裁         主人打断 / 群友排队（附录 1）；无 @ 的 auto 插话遇在途直接丢弃（P2）
- *   8. 防抖合并         800ms 内的多条消息并成一次生成；只合并同一个人（P1）
- *   9. 上下文聚合 → 生成 → 转换 → 发送
+ *   8. 生成前二次频控   入队时放行、出队时已超限的排队项直接丢弃（堵住"排队绕过限速"）
+ *   9. 防抖合并         800ms 内的多条消息并成一次生成；只合并同一个人（P1）
+ *  10. 上下文聚合 → 生成 → 转换 → 发送
  *
  * 第 4 步的位置是关键：旧 Bridge 把 LivingMemory 广播放在所有 return 之前
  * （bridge.js:1162-1184，注释写明 "before any wake/ignore return"），
@@ -25,6 +26,7 @@ import { ROUTES } from '../contracts/capabilities.js';
 import { MESSAGE_TYPES, createInboundMessage } from '../contracts/messages.js';
 import { classifyError } from '../contracts/errors.js';
 import { getIdentityRole } from '../core/permission-policy.js';
+import { evaluateRateLimit, resolveRateLimitPolicy } from '../core/rate-limit-policy.js';
 
 export class InboundFlow {
   /**
@@ -48,7 +50,17 @@ export class InboundFlow {
     this.trace = deps.traceCollector ?? null;
     this.config = deps.config;
     this.log = deps.logger?.child({ component: 'inbound-flow' }) ?? console;
-    this.rateLimitUsers = new Set((deps.config.identity.rateLimitUsers ?? []).map(String));
+  }
+
+  /**
+   * 频控求值（现读活配置，与 decision-flow 共用同一份策略）。
+   * 入站裁决与生成前复核都调它，保证两处口径一致。
+   */
+  _checkRateLimit(inbound) {
+    return evaluateRateLimit(
+      resolveRateLimitPolicy(inbound?.userId, inbound?.messageType, this.config),
+      (userId, windowMs) => this.sessions.countRecentReplies(userId, windowMs),
+    );
   }
 
   /**
@@ -88,6 +100,21 @@ export class InboundFlow {
       return;
     }
 
+    // 群聊白名单门禁（第一道）：与私聊门禁同理，必须早于 normalize——
+    // 非白名单群的图片/文件不该被落盘，引用消息也不该被回拉。
+    if (
+      rawEvent?.post_type === 'message' &&
+      rawEvent.message_type === 'group' &&
+      !this._isGroupAllowed(rawEvent.group_id)
+    ) {
+      this.health?.increment('messages', 'ignored');
+      this.log.info('群聊非白名单群，已在规范化前拦截丢弃', {
+        correlationId,
+        groupId: String(rawEvent.group_id ?? ''),
+      });
+      return;
+    }
+
     const { message: inbound, dropped } = await this.normalizer.normalize(rawEvent, { correlationId });
     if (!inbound) {
       if (dropped && dropped !== 'not_a_message_event') {
@@ -111,6 +138,18 @@ export class InboundFlow {
         correlationId,
         userId: inbound.userId,
         displayName: inbound.sender?.displayName,
+      });
+      return;
+    }
+
+    // 群聊白名单门禁（第二道）：正常情况下第一道已经拦掉了，这里兜住归一化
+    // 规则变化——normalizer 把一切非 private 的 message_type 都映射成 GROUP。
+    // 拦在这里意味着：不进滑窗、不广播、不触发好感/表情包/大模型。
+    if (inbound.messageType === MESSAGE_TYPES.GROUP && !this._isGroupAllowed(inbound.groupId)) {
+      this.health?.increment('messages', 'ignored');
+      this.log.info('群聊非白名单群，已直接拦截丢弃', {
+        correlationId,
+        groupId: inbound.groupId,
       });
       return;
     }
@@ -374,8 +413,35 @@ export class InboundFlow {
     const pending = this.sessions.drainBuffer(executionKey);
     if (pending.length === 0) return;
 
+    // 生成前二次频控。裁决那一关是在**入队时**过的：在途生成期间排队的消息当时
+    // 计数还没到阈值（典型：群聊被顶住时同一人连发三五条），等轮到它生成时限额
+    // 早已用满。不在这里复核的话，"排队"就是绕过限速的正式后门。
+    // 只丢超限用户自己的排队项，其余人照常——被丢的人不占别人的位，也不会饿死别人。
+    const admitted = [];
+    const suppressed = [];
+    for (const item of pending) {
+      if (this._checkRateLimit(item.inbound).limited) suppressed.push(item);
+      else admitted.push(item);
+    }
+    if (suppressed.length > 0) {
+      const sample = suppressed[0].inbound;
+      this.log.warn('排队期间已触发频控，排队项直接丢弃', {
+        executionKey,
+        userId: sample.userId,
+        displayName: sample.sender?.displayName,
+        dropped: suppressed.length,
+      });
+      for (let i = 0; i < suppressed.length; i++) this.health?.increment('messages', 'ignored');
+    }
+    if (admitted.length === 0) {
+      // 本轮没有可回的人；排队期间可能又进来了新消息，照常调下一轮
+      const buf = this.sessions.getBuffer(executionKey);
+      if (buf.pending.length > 0 && !buf.timer) this._scheduleGeneration(executionKey);
+      return;
+    }
+
     // 只合并同一个人的消息，其余人原序退回队列等下一轮（P1）
-    const { batch, rest } = splitBySpeaker(pending);
+    const { batch, rest } = splitBySpeaker(admitted);
     if (rest.length > 0) {
       this.sessions.requeue(executionKey, rest);
       this.log.info('排队批次按发言人切分，其余人留待下一轮', {
@@ -421,9 +487,10 @@ export class InboundFlow {
 
       if (result.status === 'ok') {
         this.health?.increment('messages', 'replied');
-        if (this.rateLimitUsers.has(String(inbound.userId))) {
-          this.sessions.recordReply(inbound.userId);
-        }
+        // 计数只对"当前确实受频控约束"的用户发生（名单内，且私聊未启用时私聊不计），
+        // 防止私聊回复把群聊的额度提前烧掉。windowMs 用该用户实际生效的窗口。
+        const policy = resolveRateLimitPolicy(inbound.userId, inbound.messageType, this.config);
+        if (policy) this.sessions.recordReply(policy.userId, policy.windowMs);
         this.shadow?.recordReply({ inbound, decision, result, contextBlocks: blocks });
       }
 
@@ -484,6 +551,21 @@ export class InboundFlow {
       extensions: { napcat: {}, proactive: true },
     });
 
+    // 外部主动接话以前完全绕过频控（它不经过 decisionFlow.decide），名单内的
+    // 用户只要被宿主点名“主动接话”就能无限拿到回复。这里补上同一把尺子。
+    const limit = this._checkRateLimit(inbound);
+    if (limit.limited) {
+      this.log.warn(limit.blocked ? '主动接话被严格拦截' : '主动接话被频控拦截', {
+        correlationId,
+        groupId,
+        userId: limit.policy.userId,
+        count: limit.count,
+        limit: limit.policy.maxReplies,
+        windowMs: limit.policy.windowMs,
+      });
+      return { accepted: false, reason: limit.blocked ? 'blocked' : 'rate_limited' };
+    }
+
     this._buffer(inbound, { route: ROUTES.AUTO, triggerType: 'ai_decision', reason: 'external_dispatch' });
     this._scheduleGeneration(executionKey);
     return { accepted: true };
@@ -499,6 +581,21 @@ export class InboundFlow {
       return false;
     }
     return whitelist.map((id) => String(id).trim()).includes(uid);
+  }
+
+  /**
+   * 群聊白名单（与私聊相反：**fail-open**）。
+   *
+   * 未配置 / 不是数组 / 空数组 = 全部群聊照常放行（完全向后兼容旧配置）；
+   * 一旦填了名单，就只放行名单内的群，其余在入口处直接丢弃。
+   * 群号与名单项都做 String+trim 归一化，兼容手写 JSON 时的数字写法。
+   */
+  _isGroupAllowed(groupId) {
+    const whitelist = this.config.identity?.groupWhitelist;
+    if (!Array.isArray(whitelist) || whitelist.length === 0) return true;
+
+    const gid = String(groupId ?? '').trim();
+    return whitelist.map((id) => String(id).trim()).includes(gid);
   }
 }
 

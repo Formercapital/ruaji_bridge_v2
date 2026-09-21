@@ -134,14 +134,6 @@ export function buildTestContainer(opts = {}) {
     env: { ...process.env, NAPCAT_ACCESS_TOKEN: 'test-token', HERMES_API_KEY: 'test-key' },
     cliOverrides: {
       mode: 'test',
-      identity: {
-        ownerId: '10000001',
-        robotId: '398276230',
-        botName: '瑞姬',
-        rateLimitUsers: ['10000002'],
-        privateWhitelist: ['10000001', '10000003'],
-        ...(opts.configOverrides?.identity ?? {}),
-      },
       reply: {
         sendEnabled: false,
         sideEffectsEnabled: false,
@@ -164,6 +156,18 @@ export function buildTestContainer(opts = {}) {
       health: { port: 0, lockPort: 0 },
       plugins: opts.plugins ?? [],
       ...(opts.configOverrides ?? {}),
+      // identity 放在最后一个 spread **之后**：configOverrides.identity 只该覆盖它显式
+      // 给的字段，不能因为整体替换对象而丢掉这里钉死的测试基线（例如 example 里的
+      // groupWhitelist 是非空名单，一旦漏进来所有群聊用例都会被白名单门禁拦在入口）。
+      identity: {
+        ownerId: '10000001',
+        robotId: '398276230',
+        botName: '瑞姬',
+        rateLimitUsers: ['10000002'],
+        privateWhitelist: ['10000001', '10000003'],
+        groupWhitelist: [],
+        ...(opts.configOverrides?.identity ?? {}),
+      },
     },
   });
 

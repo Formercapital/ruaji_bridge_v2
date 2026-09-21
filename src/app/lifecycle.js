@@ -32,6 +32,7 @@ export class Lifecycle {
     const { config } = this.c;
 
     const privateWhitelist = config.identity.privateWhitelist ?? [];
+    const groupWhitelist = config.identity.groupWhitelist ?? [];
     this.log.info('RUAJI Bridge v2 启动中', {
       mode: config.mode,
       sendEnabled: config.reply.sendEnabled,
@@ -41,6 +42,10 @@ export class Lifecycle {
       privateWhitelist: privateWhitelist.length > 0
         ? `${privateWhitelist.length} 人放行 + 主人`
         : '仅主人（名单为空）',
+      // 群聊是反过来的：名单为空＝全部放行，填了才收窄
+      groupWhitelist: groupWhitelist.length > 0
+        ? `${groupWhitelist.length} 群放行`
+        : '全部放行',
     });
 
     // ===== 单实例锁 =====
