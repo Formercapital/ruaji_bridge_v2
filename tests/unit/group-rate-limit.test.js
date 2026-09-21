@@ -10,6 +10,9 @@
  *   2. 额度求值与冷却剩余量（resolveGroupRateLimitPolicy / evaluateGroupRateLimit）
  *   3. 提示渲染（renderGroupCooldownNotice）
  *   4. InboundFlow 端到端（限额内放行 / 超额自动回复 / 纯群号无限制 / 主动接话 / 热更新）
+ *   5. 计数口径：只有群友真 @（flags.isAtBot）的成功回复才消耗群额度；auto 插话与
+ *      宿主主动接话照常回复但不计数；额度被 @ 耗尽后 auto 仍被静默拦截。
+ *   6. 主人 / 管理员门禁 + 计数双豁免
  */
 
 import test from 'node:test';
@@ -203,7 +206,9 @@ test('SessionStore：群级计数与用户级分开存，同一个字符串键�
 // 五、InboundFlow 端到端
 // ===========================================================================
 
-function makeGroupFlow({ configOverrides = {}, now = () => Date.now() } = {}) {
+function makeGroupFlow({ configOverrides = {}, now = () => Date.now(), decideRoute = 'direct' } = {}) {
+  // 允许传函数：测试里可以在同一条链路上把裁决从 direct 切成 auto 再切回来
+  const routeOf = typeof decideRoute === 'function' ? decideRoute : () => decideRoute;
   const logger = createTestLogger();
   const config = {
     identity: {
@@ -258,7 +263,15 @@ function makeGroupFlow({ configOverrides = {}, now = () => Date.now() } = {}) {
   const healthCalls = [];
   const health = { increment: (section, field) => healthCalls.push(`${section}.${field}`) };
   const decisionFlow = {
-    decide: async () => ({ route: 'direct', triggerType: 'at', reason: 'test', providerId: null }),
+    decide: async (inbound) => {
+      const route = routeOf(inbound);
+      return {
+        route,
+        triggerType: route === 'auto' ? 'ai_decision' : 'at',
+        reason: 'test',
+        providerId: null,
+      };
+    },
     arbitrateConcurrency: async (inbound) => (
       sessionStore.isBusy(inbound.executionKey) ? { action: 'queue' } : { action: 'start' }
     ),
@@ -397,27 +410,145 @@ test('群频控端到端：非 @ 消息在冷却期被静默拦截，不刷提�
   assert.equal(sent.length, 0, '非 @ 消息不该收到冷却提示（避免刷屏）');
 });
 
-test('群频控端到端：冷却期宿主主动接话也被拦截', async () => {
+test('群频控端到端：冷却期宿主主动接话（auto）也被静默拦截', async () => {
   const clock = { t: 6_000_000 };
-  const { inboundFlow, generated } = makeGroupFlow({
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
     now: () => clock.t,
     configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
   });
 
-  const first = await inboundFlow.handleProactive({
-    groupId: '1076958977', userId: '999999999', nickname: '群友', message: '睡了吗',
-  });
-  assert.equal(first.accepted, true);
+  // 群友真 @ 用满额度——真 @ 是现在唯一消耗群额度的途径
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
   await flush();
   assert.equal(generated.length, 1);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
 
   const second = await inboundFlow.handleProactive({
-    groupId: '1076958977', userId: '999999999', nickname: '群友', message: '还没睡吗',
+    groupId: '1076958977', userId: '999999999', nickname: '群友', message: '睡了吗',
   });
   assert.equal(second.accepted, false);
   assert.equal(second.reason, 'rate_limited');
   await flush();
   assert.equal(generated.length, 1, '群冷却不得被主动接话绕过');
+  assert.equal(sent.length, 0, '主动接话被拦不回提示（静默）');
+});
+
+// ===========================================================================
+// 六、auto 插话不消耗群额度
+//
+// 计数规则：只有群友真 @（inbound.flags.isAtBot）且成功回复才 recordGroupReply。
+// auto 插话（裁决 ROUTES.AUTO / 宿主 handleProactive）照常回复但不烧群额度，
+// 否则机器人自己的插话会把自己关进冷却。门禁方向不变：额度被群友的 @ 耗尽后，
+// auto 消息仍然被静默丢弃（不调模型、不发提示）。
+// ===========================================================================
+
+test('群频控计数：auto 插话与主动接话都成功回复，但都不计入群额度', async () => {
+  const clock = { t: 15_000_000 };
+  const holder = { route: 'auto' };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    decideRoute: () => holder.route,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:2:300000'] } },
+  });
+
+  // 裁决为 ROUTES.AUTO 的群聊消息（无 @）：正常生成，但群计数保持不变
+  await inboundFlow.handleEvent(groupEvent({ rawMessage: '今天天气不错' }));
+  await flush();
+  assert.equal(generated.length, 1, 'auto 插话照常回复');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 0, 'auto 插话不烧群额度');
+
+  // 宿主外部接话（handleProactive）同样是 auto 路径，同样不计数
+  const accepted = await inboundFlow.handleProactive({
+    groupId: '1076958977', userId: '999999999', nickname: '群友', message: '睡了吗',
+  });
+  assert.equal(accepted.accepted, true);
+  await flush();
+  assert.equal(generated.length, 2);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 0, '主动接话不烧群额度');
+
+  // 群友真 @：只有这一条计入
+  holder.route = 'direct';
+  await inboundFlow.handleEvent(groupEvent({ rawMessage: '[CQ:at,qq=398276230] 在吗' }));
+  await flush();
+  assert.equal(generated.length, 3);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1, '真 @ 的成功回复才计数');
+  assert.equal(sent.length, 0);
+});
+
+test('群频控计数：auto 插话再多也不烧额度（额度 1 的群里真 @ 随后仍放行）', async () => {
+  const clock = { t: 16_000_000 };
+  const holder = { route: 'auto' };
+  const { sessionStore, inboundFlow, generated } = makeGroupFlow({
+    now: () => clock.t,
+    decideRoute: () => holder.route,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await inboundFlow.handleEvent(groupEvent({ rawMessage: `闲聊 ${i}` }));
+    await flush();
+  }
+  assert.equal(generated.length, 3, '额度未被消耗，auto 插话不会被自己的计数挡住');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 0, '一条都不计数');
+
+  holder.route = 'direct';
+  await inboundFlow.handleEvent(groupEvent({ rawMessage: '[CQ:at,qq=398276230] 在吗' }));
+  await flush();
+  assert.equal(generated.length, 4, 'auto 不烧额度，真 @ 依然落在额度内');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
+});
+
+test('群频控计数：同一人的 @ 与后续补话合并成一轮，仍算真 @（不被末条非 @ 抹掉）', async () => {
+  const clock = { t: 17_000_000 };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    configOverrides: {
+      identity: { groupWhitelist: ['1076958977:1:300000'] },
+      decision: { debounceMs: 50 },
+    },
+  });
+
+  await inboundFlow.handleEvent(groupEvent({ rawMessage: '[CQ:at,qq=398276230] 在吗' }));
+  await inboundFlow.handleEvent(groupEvent({ rawMessage: '顺便问下今天天气' }));
+  await flush(120);
+
+  assert.equal(generated.length, 1, '同一人的 @ 与补话合并成一轮生成');
+  assert.equal(
+    sessionStore.countRecentGroupReplies('1076958977', 300000),
+    1,
+    '@ 唤醒的合并回复仍计一次——否则 @ 完再补一句就是永久免额度的后门',
+  );
+  assert.equal(sent.length, 0);
+});
+
+test('群频控端到端：额度被真 @ 耗尽后，冷却期 auto 消息仍被静默拦截', async () => {
+  const clock = { t: 18_000_000 };
+  const holder = { route: 'auto' };
+  const { sessionStore, inboundFlow, generated, sent } = makeGroupFlow({
+    now: () => clock.t,
+    decideRoute: () => holder.route,
+    configOverrides: { identity: { groupWhitelist: ['1076958977:1:300000'] } },
+  });
+
+  // 群友真 @ 把额度用满
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999' }));
+  await flush();
+  assert.equal(generated.length, 1);
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1);
+
+  // 冷却期内 auto 插话：门禁在裁决之前，静默丢弃——不调模型、不发冷却提示
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999', rawMessage: '那我自己聊' }));
+  await flush();
+  assert.equal(generated.length, 1, '冷却期 auto 不得进入生成');
+  assert.equal(sent.length, 0, '冷却期 auto 不发提示（休息期间不插话）');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 1, '计数不变');
+
+  // 冷却滑过后 auto 恢复：证明拦截确实来自冷却而非 auto 本身被禁
+  clock.t += 300001;
+  await inboundFlow.handleEvent(groupEvent({ userId: '999999999', rawMessage: '我还在呢' }));
+  await flush();
+  assert.equal(generated.length, 2, '冷却结束后 auto 照常插话');
+  assert.equal(sessionStore.countRecentGroupReplies('1076958977', 300000), 0, '滑窗过期后计数清零');
 });
 
 test('群频控端到端：热更新群额度后立即生效（面板保存即生效）', async () => {
@@ -491,7 +622,7 @@ test('群频控端到端：自定义提示文案热生效，{minutes} 被替换'
 });
 
 // ===========================================================================
-// 六、主人 / 管理员特权豁免（群频控门禁 + 计数双双豁免）
+// 七、主人 / 管理员特权豁免（群频控门禁 + 计数双双豁免）
 // ===========================================================================
 
 test('群频控豁免：群冷却期间主人 @ 仍正常生成、不回冷却提示，且不计入群额度', async () => {

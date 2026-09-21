@@ -650,9 +650,20 @@ export class InboundFlow {
         const policy = resolveRateLimitPolicy(inbound.userId, inbound.messageType, this.config);
         if (policy) this.sessions.recordReply(policy.userId, policy.windowMs);
         // 群级频控同理：只对配了额度的群计数，windowMs 用该群实际生效的窗口。
-        // 主人 / 管理员豁免计数——他们的回复不占用群额度，否则特权放行仍会把
-        // 群友的额度烧光（门禁豁免与计数豁免必须成对）。
-        if (inbound.messageType === MESSAGE_TYPES.GROUP && !this._isGroupRateLimitExempt(inbound)) {
+        // 两条豁免：
+        //   1) 主人 / 管理员——他们的回复不占用群额度，否则特权放行仍会把群友的
+        //      额度烧光（门禁豁免与计数豁免必须成对）。
+        //   2) auto 主动插话（裁决 ROUTES.AUTO、宿主 handleProactive）——自动接话
+        //      不该挤占群友的额度，否则机器人自己的插话会把自己关进冷却。
+        // 判定口径 = 本轮批次里有没有真 @，单条批次就等价于 inbound.flags.isAtBot。
+        // 用 batch 而不是 merged.flags，是因为同一人的 @ 与后续补话会合并成一条，
+        // merged.flags 取末条会把 @ 唤醒的回复误判成 auto，留下"@ 完再补一句就
+        // 不计数"的额度绕过口子。
+        if (
+          inbound.messageType === MESSAGE_TYPES.GROUP
+          && !this._isGroupRateLimitExempt(inbound)
+          && batch.some((item) => item.inbound.flags?.isAtBot === true)
+        ) {
           const groupPolicy = resolveGroupRateLimitPolicy(inbound.groupId, this.config);
           if (groupPolicy) this.sessions.recordGroupReply(groupPolicy.groupId, groupPolicy.windowMs);
         }
