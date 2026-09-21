@@ -11,6 +11,12 @@
  *   - 文件下载 + 文本内容摘要
  *   - 引用消息（[CQ:reply,id=…]）拉取原消息、原消息里的图片与文件
  *   - 面向模型的 content 组装：引用前置、文件摘要前置、@机器人转成 " @瑞姬 "
+ *
+ * 有意偏离旧 Bridge 的一点（2026-09 群聊媒体收敛）：**群聊只在被 @ 机器人、叫了
+ * 机器人名字或引用了机器人自己的消息时才落盘媒体**。旧实现是"收到就下载"，群里
+ * 任何人发的图/文件都会被无差别拉到本地；现在路过消息只登记 deferred 描述符
+ * （localPath=null + fileId），模型需要时用 download_group_file /
+ * download_chat_file / get_image_detail 主动拉取。私聊行为不变（照旧全收）。
  */
 
 import {
@@ -60,6 +66,7 @@ export class InboundNormalizer {
    * @param {object} opts.identity  { ownerId, robotId, botName }
    * @param {object} opts.wake      { mode, namePattern }
    * @param {import('./media-ingestor.js').MediaIngestor} [opts.mediaIngestor]
+   *   没有时视为"不落盘"：群聊唤醒消息的媒体会被静默跳过（生产环境总是注入了）
    * @param {import('./napcat-api.js').NapcatApi} [opts.napcatApi]
    * @param {import('../../core/logger.js').Logger} [opts.logger]
    */
@@ -120,8 +127,24 @@ export class InboundNormalizer {
       );
     const isNameCall = this.namePattern.test(text);
 
-    // 媒体落盘（附录 2）：图片与文件都拿到本地绝对路径
-    const media = await this._ingestMedia(segments, { groupId, signal: ctx.signal });
+    // 引用消息：先只解析来源（必要时发一次 get_msg），拿到"引用的是不是机器人
+    // 自己"之后才能决定本条消息的媒体要不要落盘（见 _shouldIngestMedia）。
+    const quoteSource = await this._resolveQuoteSource(segments, rawMessage, { signal: ctx.signal });
+
+    // 媒体落盘策略（附录 2 + 2026-09 群聊收敛）：私聊照旧全收；群聊只在被唤醒
+    // （@ 机器人 / 叫机器人名字）或引用了机器人自己的消息时落盘。群里普通路过的
+    // 图片/文件只登记"未下载"描述符，需要时由模型用 download_group_file /
+    // download_chat_file / get_image_detail 主动拉取。
+    const ingest = this._shouldIngestMedia({
+      messageType,
+      isAtBot,
+      isNameCall,
+      quoteIsBot: quoteSource?.isBot === true,
+    });
+
+    const media = ingest
+      ? await this._ingestMedia(segments, { groupId, signal: ctx.signal })
+      : this._deferredMediaOf(segments);
 
     // 归属标注：本条消息自带的媒体，作者就是发送者。渲染层据此在每张图
     // 紧前面插一行说明牌（prompt-renderer.renderUserMessage），模型才能
@@ -131,8 +154,9 @@ export class InboundNormalizer {
       item.originAuthor = sender.displayName;
     }
 
-    // 引用消息：拉原消息，连带其中的图片与文件
-    const quote = await this._resolveQuote(segments, rawMessage, { groupId, signal: ctx.signal });
+    const quote = quoteSource
+      ? await this._finishQuote(quoteSource, { groupId, signal: ctx.signal, ingest })
+      : null;
     if (quote?.media?.length) media.push(...quote.media);
 
     const content = this._buildContent({ rawMessage, quote, media, isAtBot });
@@ -235,10 +259,81 @@ export class InboundNormalizer {
   }
 
   /**
-   * 解析 [CQ:reply,id=…]，拉取被引用的原消息。
-   * 旧实现见 bridge.js:1359-1473。
+   * 群聊媒体落盘策略。
+   *
+   * 落盘不是零成本的：写硬盘、向 NapCat 换取直链、必要时从腾讯 CDN 拉整个文件。
+   * 群聊里绝大多数消息都只是"路过"，与机器人无关，不该为它们付这笔钱；
+   * 只有这条消息真的会被机器人看到时才值得预先备好本地副本：
+   *   - 私聊：全部落盘（与改动前一致）；
+   *   - 群聊里 @ 了机器人 / 叫了机器人名字：落盘；
+   *   - 群聊引用了机器人自己的消息：落盘（被引用的原消息里也可能带图/文件）。
+   * 其余群聊消息只产出 deferred 描述符（见 _deferredMediaOf）。
+   *
+   * 这里刻意**不看 wake.mode**：@ 在 decision-flow 里是硬优先级（at_overrides_
+   * provider_ignore），名字提及也会拿到 KEYWORD 交互情境提示，裁决者照样可能
+   * 判 direct——两者都可能真的被回复。按 wake.mode 卡落盘会出现"瑞姬已经准备
+   * 回这条了，却看不到消息里的图"。
    */
-  async _resolveQuote(segments, rawMessage, { groupId, signal }) {
+  _shouldIngestMedia({ messageType, isAtBot, isNameCall, quoteIsBot }) {
+    if (messageType !== MESSAGE_TYPES.GROUP) return true;
+    return isAtBot === true || isNameCall === true || quoteIsBot === true;
+  }
+
+  /**
+   * 不落盘时的媒体描述符。
+   *
+   * 结构仍是标准 media item（kind / url / localPath / origin），只是 localPath
+   * 为 null、deferred 为 true，并补上 fileId / busid 让模型能用 QQ 工具回捞。
+   * 不下载、不发请求、不写硬盘——纯本地字段整理。
+   */
+  _deferredMediaOf(segments) {
+    const out = [];
+    for (const seg of segments ?? []) {
+      const data = seg?.data ?? {};
+      if (seg.type === 'image' || seg.type === 'mface') {
+        const item = {
+          kind: 'image',
+          localPath: null,
+          url: data.url ? String(data.url) : null,
+          fileId: mediaFileIdOf(data),
+          mime: null,
+          name: null,
+          sizeBytes: positiveNumberOrNull(data.file_size ?? data.size),
+          deferred: true,
+        };
+        if (seg.type === 'mface') {
+          // 与落盘路径同款：summary（如 "[摸头]"）剥掉方括号当初始标签
+          item.label = String(data.summary ?? '').replace(/^\[+|\]+$/g, '').trim() || null;
+        }
+        out.push(item);
+      } else if (seg.type === 'file' || seg.type === 'offline_file') {
+        const name = mediaNameOf(data);
+        const sizeBytes = positiveNumberOrNull(data.file_size ?? data.size);
+        out.push({
+          kind: 'file',
+          localPath: null,
+          url: data.url ? String(data.url) : null,
+          fileId: mediaFileIdOf(data),
+          busid: positiveNumberOrNull(data.busid) ?? 102,
+          name,
+          sizeBytes,
+          deferred: true,
+          summary: `[收到文件: ${name}${sizeBytes ? ` (${(sizeBytes / 1024).toFixed(1)}KB)` : ''}，未下载]`,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 解析 [CQ:reply,id=…] 的第一阶段：只回答"引用了哪条消息、原作者是谁"，
+   * 不落盘任何媒体。落盘策略依赖 quoteIsBot，所以必须与媒体处理拆开两段走。
+   * 旧实现见 bridge.js:1359-1473；返回 null 表示这条消息没有引用。
+   *
+   * @returns {Promise<{replyId: string, inlineText: string, quotedNick: string|null,
+   *   isBot: boolean, quotedSegments: object[], quotedText: string}|null>}
+   */
+  async _resolveQuoteSource(segments, rawMessage, { signal } = {}) {
     const replySeg = segments.find((s) => s.type === 'reply');
     const replyId = replySeg?.data?.id ?? extractReplyIdFromRaw(rawMessage);
     if (!replyId) return null;
@@ -246,21 +341,25 @@ export class InboundNormalizer {
     const inlineText = replySeg?.data?.text
       ? String(replySeg.data.text).replace(/\[CQ:image[^\]]*\]/g, '[图片]')
       : '';
+    const unresolved = {
+      replyId,
+      inlineText,
+      quotedNick: null,
+      isBot: false,
+      quotedSegments: [],
+      quotedText: '',
+    };
 
-    if (!this.api) {
-      return inlineText ? { messageId: replyId, summary: `[引用消息: ${inlineText}]`, media: [] } : null;
-    }
+    if (!this.api) return unresolved;
 
     let original;
     try {
       original = await this.api.getMsg(replyId);
     } catch (err) {
       this.log.warn('引用消息拉取失败', { replyId, error: err.message });
-      return inlineText ? { messageId: replyId, summary: `[引用消息: ${inlineText}]`, media: [] } : null;
+      return unresolved;
     }
-    if (!original) {
-      return inlineText ? { messageId: replyId, summary: `[引用消息: ${inlineText}]`, media: [] } : null;
-    }
+    if (!original) return unresolved;
 
     // 引用作者名是群成员可控文本（群名片），进 Prompt 前过 at 昵称同款净化
     const quotedNick =
@@ -277,10 +376,21 @@ export class InboundNormalizer {
       ? segmentsToText(original.message)
       : annotateCqCodes(String(original.message ?? original.raw_message ?? inlineText ?? ''));
 
-    const media = await this._ingestMedia(quotedSegments, { groupId, signal });
+    return { replyId, inlineText, quotedNick, isBot, quotedSegments, quotedText };
+  }
+
+  /**
+   * 引用的第二阶段：接上媒体（落盘或只登记描述符）并合成摘要。
+   */
+  async _finishQuote(source, { groupId, signal, ingest }) {
+    const { replyId, inlineText, quotedNick, isBot, quotedSegments, quotedText } = source;
+    const media = ingest
+      ? await this._ingestMedia(quotedSegments, { groupId, signal })
+      : this._deferredMediaOf(quotedSegments);
+
     for (const item of media) {
       item.origin = 'quote';
-      item.originAuthor = isBot ? (this.identity.botName || quotedNick) : quotedNick;
+      item.originAuthor = isBot ? (this.identity.botName || quotedNick || '你') : (quotedNick ?? '未知');
       item.originIsBot = isBot;
     }
     const fileSummaries = media
@@ -372,6 +482,26 @@ function normalizeTimestamp(time) {
   const n = Number(time);
   if (!Number.isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
   return n >= 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+}
+
+/** 图片/文件片段的回捞标识：file_id 优先，其次 file（NapCat 图片常用 file 当标识） */
+function mediaFileIdOf(data) {
+  const id = data?.file_id ?? data?.fileId ?? data?.file;
+  return id == null || id === '' ? null : String(id);
+}
+
+/** 文件名：name / file_name 优先，file 是路径或纯文件名时取末段 */
+function mediaNameOf(data) {
+  const explicit = data?.name || data?.file_name;
+  if (explicit) return String(explicit);
+  const raw = String(data?.file ?? '');
+  if (raw && !/^https?:/i.test(raw)) return raw.split(/[\\/]/).pop() || raw;
+  return `file_${Date.now()}`;
+}
+
+function positiveNumberOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function extractReplyIdFromRaw(rawMessage) {

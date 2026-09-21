@@ -42,6 +42,8 @@ export class InboundFlow {
     this.replyFlow = deps.replyFlow;
     this.inputStatus = deps.inputStatus ?? null;
     this.commandFlow = deps.commandFlow;
+    /** 表情包收集会话要补拉 deferred 图片（见 _hydrateDeferredImages） */
+    this.mediaIngestor = deps.mediaIngestor ?? null;
     this.affection = deps.affectionStore;
     this.memeStore = deps.memeStore ?? null;
     this.health = deps.health ?? null;
@@ -177,6 +179,9 @@ export class InboundFlow {
     // 表情包收集：处于收集会话中的用户发图自动入库
     let collectedCount = 0;
     if (this.memeStore?.isCollecting(inbound.userId) && Array.isArray(inbound.media)) {
+      // 群聊非唤醒消息的图片默认不落盘（deferred）。收集会话是用户显式开启的
+      // "我要存图"，这几张图必须真的入库，所以先按需补拉。
+      await this._hydrateDeferredImages(inbound);
       for (const m of inbound.media) {
         if (m.kind === 'image' && m.localPath && fs.existsSync(m.localPath)) {
           try {
@@ -256,6 +261,54 @@ export class InboundFlow {
 
     this._buffer(inbound, decision);
     this._scheduleGeneration(inbound.executionKey);
+  }
+
+  /**
+   * 表情包收集会话专用：把 deferred 图片补拉落盘。
+   *
+   * 群聊非唤醒消息默认不落盘（群聊媒体策略），但 /收集表情 是用户显式开启的
+   * "我要存图"会话——后续图片必须真的入库，不能因为没 @ 就被策略挡在门外。
+   * 只处理图片；落盘结果就地覆盖描述符，同时保留归属标注与 mface 标签。
+   *
+   * @returns {Promise<number>} 成功补拉的张数
+   */
+  async _hydrateDeferredImages(inbound) {
+    const items = Array.isArray(inbound.media)
+      ? inbound.media.filter((m) => m?.deferred === true && m.kind === 'image')
+      : [];
+    if (!this.mediaIngestor || items.length === 0) return 0;
+
+    let hydrated = 0;
+    for (const item of items) {
+      try {
+        const got = await this.mediaIngestor.ingestImage(
+          { file: item.fileId ?? undefined, url: item.url ?? undefined },
+          {},
+        );
+        if (!got) continue;
+        Object.assign(item, got, {
+          deferred: false,
+          origin: item.origin,
+          originAuthor: item.originAuthor,
+          originIsBot: item.originIsBot,
+          ...(item.label ? { label: item.label } : {}),
+        });
+        hydrated += 1;
+      } catch (err) {
+        this.log.warn('表情收集补拉图片失败', {
+          correlationId: inbound.correlationId,
+          error: err.message,
+        });
+      }
+    }
+    if (hydrated > 0) {
+      this.log.debug('表情收集：deferred 图片已补拉落盘', {
+        correlationId: inbound.correlationId,
+        hydrated,
+        total: items.length,
+      });
+    }
+    return hydrated;
   }
 
   /**

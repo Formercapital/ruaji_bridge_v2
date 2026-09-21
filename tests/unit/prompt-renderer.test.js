@@ -766,3 +766,52 @@ test('[最近群聊消息] 整批排除：触发文本每句话只出现一次�
   assert.equal(out.split('瑞姬看看这个').length - 1, 1, '触发文本中的话不应以滑窗形式重复出现');
   assert.equal(out.split('对，就是这个').length - 1, 1);
 });
+
+// ===== 群聊未下载媒体（deferred）：不挂多模态，改为主动拉取提示 =====
+
+test('deferred 图片不挂多模态 parts，改为工具拉取提示', () => {
+  const inbound = makeInbound({
+    media: [{ kind: 'image', deferred: true, localPath: null, url: 'https://x/y.png', fileId: 'A.png' }],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+
+  assert.equal(typeof out, 'string', '没有可挂的图就返回纯文本，不能有 image_url part');
+  assert.ok(out.includes('[未下载的媒体]'));
+  assert.ok(out.includes('get_image_detail(file=A.png)'));
+});
+
+test('deferred 图与已落盘图混排：只挂已落盘那张，提示里带 deferred 的 fileId', () => {
+  const inbound = makeInbound({
+    media: [
+      { kind: 'image', localPath: 'F:/received_images/a.png', origin: 'message', originAuthor: '甲' },
+      { kind: 'image', deferred: true, localPath: null, url: 'https://x/y.png', fileId: 'B.png' },
+    ],
+  });
+  const parts = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+
+  assert.ok(Array.isArray(parts));
+  assert.equal(parts.filter((p) => p.type === 'image_url').length, 1, 'deferred 图不得进 parts');
+  assert.ok(parts[0].text.includes('[未下载的媒体]'));
+  assert.ok(parts[0].text.includes('get_image_detail(file=B.png)'));
+  assert.ok(parts[1].text.startsWith('[图1:'), '编号只数真正挂上去的图，说明牌仍从图1开始');
+});
+
+test('deferred 文件提示带 file_id / busid 与群文件工具用法', () => {
+  const inbound = makeInbound({
+    media: [{
+      kind: 'file', deferred: true, localPath: null,
+      fileId: 'FID-1', busid: 102, name: 'Player.log', sizeBytes: 20480,
+    }],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+
+  assert.ok(out.includes('download_group_file(group_id=707423412, file_id=FID-1, busid=102)'));
+  assert.ok(out.includes('download_chat_file(file=FID-1)'));
+  assert.ok(out.includes('Player.log'));
+});
+
+test('没有 deferred 项时 Prompt 一字不变（不改动私聊/唤醒消息）', () => {
+  const inbound = makeInbound({ media: [{ kind: 'image', localPath: 'F:/a.png' }] });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
+  assert.ok(!JSON.stringify(out).includes('未下载的媒体'));
+});

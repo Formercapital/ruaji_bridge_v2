@@ -327,8 +327,14 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
 export function renderUserMessage({ inbound, contextBlocks, identity, triggerType, affectionContext }) {
   const content = renderUserContent({ inbound, contextBlocks, identity });
   const dynamicContext = renderDynamicContext({ inbound, contextBlocks, triggerType, affectionContext, identity });
-  const text = dynamicContext ? `${dynamicContext}\n\n${content}` : content;
-  const images = (inbound.media ?? []).filter((m) => m.kind === 'image');
+  let text = dynamicContext ? `${dynamicContext}\n\n${content}` : content;
+  // 未落盘的媒体（群聊路过消息）不挂多模态 parts，改成"需要时用工具回捞"的提示
+  const deferredHint = renderDeferredMediaHint(inbound);
+  if (deferredHint) text = `${text}\n\n${deferredHint}`;
+
+  // 只把真的拿到本地副本/直链的图挂进 parts。deferred 图也常常带 url，但挂上去
+  // 等于绕过了"群聊不无差别接收媒体"的策略（Hermes 会去拉整张图），必须排除。
+  const images = (inbound.media ?? []).filter((m) => m.kind === 'image' && m.deferred !== true);
   if (images.length === 0) return text;
 
   const parts = [{ type: 'text', text }];
@@ -364,6 +370,46 @@ function imageOriginLabel(image, index) {
     return `[图${no}: ${image.originAuthor} 本条消息附带的图片]`;
   }
   return `[图${no}: 本条消息附带的图片]`;
+}
+
+/**
+ * 未落盘媒体的主动拉取提示。
+ *
+ * 群聊非唤醒消息的图片/文件不再无差别下载（inbound-normalizer 的群聊媒体策略），
+ * 只登记 deferred 描述符；这里把"有什么、fileId 是多少、用哪个工具取"直接写进
+ * Prompt，模型需要时自己调 QQ 工具回捞。没有 deferred 项（私聊 / 已被唤醒 /
+ * 引用到机器人）时返回空串，Prompt 一个字都不变。
+ */
+export function renderDeferredMediaHint(inbound) {
+  const items = (inbound.media ?? []).filter((m) => m?.deferred === true);
+  if (!items.length) return '';
+
+  const groupId = inbound.groupId ?? '';
+  const lines = [];
+  let imageNo = 0;
+  let fileNo = 0;
+
+  for (const item of items) {
+    if (item.kind === 'file') {
+      fileNo += 1;
+      const sizeText = Number(item.sizeBytes) > 0 ? ` (${(item.sizeBytes / 1024).toFixed(1)}KB)` : '';
+      const how = item.fileId
+        ? (groupId
+            ? `download_group_file(group_id=${groupId}, file_id=${item.fileId}, busid=${item.busid ?? 102}) 或 download_chat_file(file=${item.fileId})`
+            : `download_chat_file(file=${item.fileId})`)
+        : '协议端没给 file_id，无法回捞';
+      lines.push(`- 文件${fileNo}: ${item.name || '未命名'}${sizeText} → 需要时用 ${how}`);
+    } else {
+      imageNo += 1;
+      const how = item.fileId ? `get_image_detail(file=${item.fileId})` : '协议端没给 file 标识，无法回捞';
+      lines.push(`- 图片${imageNo} → 需要时用 ${how}`);
+    }
+  }
+
+  return [
+    '[未下载的媒体] 本条群聊消息里的图片/文件按策略没有自动下载（群聊只在被 @ / 呼唤或引用了你时才落盘）。需要看其中内容时再调工具主动拉取，不要凭空猜测：',
+    ...lines,
+  ].join('\n');
 }
 
 /**

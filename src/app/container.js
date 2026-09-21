@@ -332,6 +332,7 @@ export function createContainer(config, overrides = {}) {
     commandFlow,
     affectionStore,
     memeStore,
+    mediaIngestor,
     health,
     shadowRecorder,
     traceCollector,

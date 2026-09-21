@@ -541,3 +541,55 @@ test('收集表情：私聊商城表情（mface）自动入库并报数（LLBOT 
   const doneReply = container.sender.dryRunLog.find((m) => m.message.includes('写入【1】张'));
   assert.ok(doneReply, `完成收集要汇报 1 张，实际: ${JSON.stringify(container.sender.dryRunLog.map((m) => m.message))}`);
 });
+
+test('收集表情：群聊非唤醒图片先 deferred、收集会话内自动补拉入库（群聊媒体收敛回归）', async (t) => {
+  const container = buildTestContainer({ replies: ['OK'] });
+  t.after(() => container.cleanup());
+  container.memeStore.data.settings.auto_ai_tagging = false;
+
+  const groupEvent = (text, messageId, extraSegments = []) => ({
+    post_type: 'message',
+    message_type: 'group',
+    sub_type: 'normal',
+    message_id: messageId,
+    self_id: 398276230,
+    user_id: 10000003,
+    group_id: 707423412,
+    time: 1788277300,
+    font: 14,
+    raw_message: text,
+    message: [{ type: 'text', data: { text } }, ...extraSegments],
+    message_format: 'array',
+    sender: { user_id: 10000003, nickname: '三锅', card: '', role: 'member' },
+  });
+
+  await container.inboundFlow.handleEvent(groupEvent('/收集表情', 910001));
+  await container.inboundFlow.handleEvent(
+    groupEvent('', 910002, [
+      { type: 'image', data: { file: 'M1.png', url: 'https://x/m1.png', sub_type: 0 } },
+    ]),
+  );
+  await container.inboundFlow.handleEvent(groupEvent('/完成收集', 910003));
+  await settle();
+
+  const store = container.memeStore;
+  assert.equal(store.size, 1, '收集会话里的群聊图片必须补拉入库，不能被群聊媒体策略挡掉');
+  assert.ok(fs.existsSync(store.data.memes[0].path), '图片要真实落盘');
+  const doneReply = container.sender.dryRunLog.find((m) => m.message.includes('写入【1】张'));
+  assert.ok(doneReply, `完成收集要汇报 1 张，实际: ${JSON.stringify(container.sender.dryRunLog.map((m) => m.message))}`);
+
+  // 非收集状态下同款群聊图片不该落盘：不留任何本地副本
+  const before = fs.existsSync(container.config.paths.receivedImagesDir)
+    ? fs.readdirSync(container.config.paths.receivedImagesDir).length
+    : 0;
+  await container.inboundFlow.handleEvent(
+    groupEvent('', 910004, [
+      { type: 'image', data: { file: 'M2.png', url: 'https://x/m2.png', sub_type: 0 } },
+    ]),
+  );
+  await settle(400);
+  const after = fs.existsSync(container.config.paths.receivedImagesDir)
+    ? fs.readdirSync(container.config.paths.receivedImagesDir).length
+    : 0;
+  assert.equal(after, before, '非收集状态下群聊路过图片不该新增本地文件');
+});

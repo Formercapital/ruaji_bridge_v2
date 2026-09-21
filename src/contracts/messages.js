@@ -85,7 +85,18 @@ export function createInboundMessage(input = {}) {
       hasQuote: input.flags?.hasQuote === true,
     },
 
-    /** 本地落盘媒体：{ kind, localPath, url, mime, name, sizeBytes } */
+    /**
+     * 媒体清单（标准契约，唯一入口是 adapters/napcat/inbound-normalizer.js）：
+     *   { kind:'image'|'file', localPath, url, fileId, origin, originAuthor,
+     *     originIsBot, deferred, mime, name, sizeBytes, label, summary }
+     * - localPath：已落盘的本地绝对路径；deferred=true 时为 null（群聊路过消息
+     *   不下载）。
+     * - deferred：本条媒体未落盘，本地无副本；fileId/busid 是留给模型用
+     *   download_group_file / download_chat_file / get_image_detail 回捞的标识。
+     *   渲染层不得把 deferred 的图直接挂进多模态 parts，只能给拉取提示。
+     * - origin：'message'（本条消息自带）| 'quote'（被引用消息里的），配合
+     *   originAuthor / originIsBot 生成图片归属说明牌。
+     */
     media: Array.isArray(input.media) ? input.media : [],
 
     /**

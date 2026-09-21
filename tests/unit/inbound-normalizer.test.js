@@ -500,3 +500,210 @@ test('直接发送 JSON 卡片消息：不被作为 EMPTY 丢弃，且 content �
   assert.ok(res.message, '纯卡片消息不应被当作 EMPTY 丢弃');
   assert.equal(res.message.content, '[QQ小程序]AI 亲自玩环世界 EP.2');
 });
+
+// ===== 群聊媒体落盘收敛（2026-09）：只在唤醒 / 引用到机器人时落盘 =====
+
+/** group-at-with-image 去掉 @：一条既没唤醒也没引用的群聊带图消息 */
+function unwokenGroupImageEvent() {
+  const fixture = loadFixture('group-at-with-image');
+  return {
+    ...fixture.event,
+    message_id: 170420555,
+    raw_message: fixture.event.raw_message.replace('[CQ:at,qq=398276230]', ''),
+  };
+}
+
+test('_shouldIngestMedia：私聊恒落盘，群聊只看 @ / 叫名字 / 引用归属', () => {
+  const n = makeNormalizer();
+  const base = { messageType: 'group', isAtBot: false, isNameCall: false, quoteIsBot: false };
+  assert.equal(n._shouldIngestMedia({ ...base, messageType: 'private' }), true);
+  assert.equal(n._shouldIngestMedia({ ...base, isAtBot: true }), true);
+  assert.equal(n._shouldIngestMedia({ ...base, isNameCall: true }), true);
+  assert.equal(n._shouldIngestMedia({ ...base, quoteIsBot: true }), true);
+  assert.equal(n._shouldIngestMedia(base), false, '严格意义上路过的群聊消息不落盘');
+});
+
+test('群聊非唤醒图片：不落盘，只登记 deferred 描述符（含 fileId 与直链）', async () => {
+  const fixture = loadFixture('group-at-with-image');
+  let called = 0;
+  const media = {
+    async ingestImage() { called += 1; throw new Error('群里路过消息的图不该下载'); },
+    async ingestFile() { called += 1; throw new Error('群里路过消息的文件不该下载'); },
+  };
+  const { message } = await makeNormalizer({ mediaIngestor: media }).normalize(unwokenGroupImageEvent());
+
+  assert.equal(called, 0, '不该触发任何下载');
+  assert.equal(message.media.length, 1);
+  assert.equal(message.media[0].kind, 'image');
+  assert.equal(message.media[0].deferred, true);
+  assert.equal(message.media[0].localPath, null);
+  assert.equal(message.media[0].fileId, 'C5BB98658F937BE0A68D3C90182F842C.png', 'fileId 要留给工具回捞');
+  assert.equal(message.media[0].url, fixture.expect.imageUrlUnescaped);
+  assert.equal(message.media[0].origin, 'message');
+  assert.equal(message.media[0].originAuthor, message.sender.displayName);
+  assert.equal(message.flags.hasImage, true, '没落盘也算"这条消息带图"');
+  assert.equal(message.content, '[图片消息]');
+});
+
+test('群聊非唤醒文件：不落盘，content 仍是未下载摘要且带 file_id', async () => {
+  const fixture = loadFixture('file-message');
+  const event = {
+    ...fixture.event,
+    message_id: 170430999,
+    raw_message: fixture.event.raw_message.replace('[CQ:at,qq=398276230]', ''),
+    message: fixture.event.message.filter((s) => s.type !== 'at'),
+  };
+  let called = 0;
+  const media = {
+    async ingestImage() { called += 1; return null; },
+    async ingestFile() { called += 1; return null; },
+  };
+  const { message } = await makeNormalizer({ mediaIngestor: media }).normalize(event);
+
+  assert.equal(called, 0, '不该触发任何下载');
+  assert.equal(message.flags.hasFile, true);
+  assert.equal(message.media.length, 1);
+  assert.equal(message.media[0].deferred, true);
+  assert.equal(message.media[0].localPath, null);
+  assert.equal(message.media[0].fileId, '/9d0f1b2c-0000-4000-8000-000000000001');
+  assert.equal(message.media[0].name, 'Player.log');
+  assert.ok(message.content.includes('未下载'));
+  assert.ok(!message.content.includes('本地绝对路径'), '没落盘就不该声称有本地路径');
+});
+
+test('群聊非唤醒的商城表情：deferred 且标签线索不丢', async () => {
+  const fixture = loadFixture('private-mface');
+  const event = {
+    ...fixture.event,
+    message_type: 'group',
+    group_id: '793019665',
+    user_id: '2260757842',
+    sender: { user_id: 2260757842, nickname: '御娘狼三千', card: '', role: 'member' },
+  };
+  const media = {
+    async ingestImage() { throw new Error('不该下载'); },
+    async ingestFile() { return null; },
+  };
+  const { message } = await makeNormalizer({ mediaIngestor: media }).normalize(event);
+
+  assert.equal(message.media[0].deferred, true);
+  assert.equal(message.media[0].label, '摸头');
+  assert.equal(message.content, '[图片消息]');
+});
+
+test('私聊图片照旧落盘（本次改动不碰私聊）', async () => {
+  const fixture = loadFixture('private-image');
+  let calls = 0;
+  const media = {
+    async ingestImage() {
+      calls += 1;
+      return { kind: 'image', localPath: 'F:/tmp/s.png', url: 'https://x/y', mime: 'image/png', name: 's.png' };
+    },
+    async ingestFile() { return null; },
+  };
+  const { message } = await makeNormalizer({ mediaIngestor: media }).normalize(fixture.event);
+
+  assert.equal(calls, 1);
+  assert.equal(message.media[0].deferred, undefined);
+  assert.equal(message.media[0].localPath, 'F:/tmp/s.png');
+});
+
+test('群聊引用机器人消息（无 @）：视为需要，本条与被引用媒体都落盘', async () => {
+  const fixture = loadFixture('group-normal');
+  const api = {
+    async getMsg() {
+      return {
+        message_id: 999100,
+        sender: { user_id: 398276230, nickname: '瑞姬', card: '' },
+        message: [{ type: 'image', data: { url: 'https://x/bot.png', file: 'bot.png' } }],
+      };
+    },
+  };
+  let ingested = 0;
+  const media = {
+    async ingestImage(data) {
+      ingested += 1;
+      return { kind: 'image', localPath: 'F:/tmp/q.png', url: data.url, mime: 'image/png', name: 'q.png' };
+    },
+    async ingestFile() { return null; },
+  };
+  const { message } = await makeNormalizer({ napcatApi: api, mediaIngestor: media }).normalize({
+    ...fixture.event,
+    message_id: 142330499,
+    raw_message: '[CQ:reply,id=999100] 这是你自己发的吧',
+    message: [
+      { type: 'reply', data: { id: '999100' } },
+      { type: 'text', data: { text: ' 这是你自己发的吧' } },
+    ],
+  });
+
+  assert.equal(message.flags.isAtBot, false, '这条消息没有 @ 机器人');
+  assert.equal(message.flags.hasQuote, true);
+  assert.equal(ingested, 1, '引用到机器人 = 需要，被引用的图要落盘');
+  assert.equal(message.media[0].origin, 'quote');
+  assert.equal(message.media[0].originIsBot, true);
+  assert.equal(message.media[0].deferred, undefined);
+  assert.equal(message.media[0].localPath, 'F:/tmp/q.png');
+});
+
+test('群聊引用他人消息（无 @）：不落盘，引用图同样降级为 deferred', async () => {
+  const fixture = loadFixture('group-normal');
+  const api = {
+    async getMsg() {
+      return {
+        message_id: 999101,
+        sender: { user_id: 2260757842, nickname: '御娘狼三千', card: '御娘狼三千' },
+        message: [{ type: 'image', data: { url: 'https://x/o.png', file: 'o.png' } }],
+      };
+    },
+  };
+  let called = 0;
+  const media = {
+    async ingestImage() { called += 1; return null; },
+    async ingestFile() { return null; },
+  };
+  const { message } = await makeNormalizer({ napcatApi: api, mediaIngestor: media }).normalize({
+    ...fixture.event,
+    message_id: 142330500,
+    raw_message: '[CQ:reply,id=999101] 看看这个',
+    message: [
+      { type: 'reply', data: { id: '999101' } },
+      { type: 'text', data: { text: ' 看看这个' } },
+    ],
+  });
+
+  assert.equal(called, 0, '引用的是别人，不是唤醒信号');
+  assert.equal(message.flags.hasQuote, true);
+  assert.equal(message.media.length, 1);
+  assert.equal(message.media[0].deferred, true);
+  assert.equal(message.media[0].origin, 'quote');
+  assert.equal(message.media[0].originAuthor, '御娘狼三千');
+  assert.equal(message.media[0].originIsBot, false);
+  assert.ok(message.content.includes('[引用 御娘狼三千 的消息: [图片]]'));
+});
+
+test('wake.mode=at 时名字呼唤照样落盘（@/叫名字是模式无关的"有人在叫我"信号）', async () => {
+  // decision-flow 里 @ 是硬优先级、名字提及也带 KEYWORD 情境提示，裁决者都可能判
+  // direct；按 wake.mode 卡落盘会造成"已经在准备回复，却看不到消息里的图"。
+  const fixture = loadFixture('group-at-with-image');
+  const event = {
+    ...fixture.event,
+    message_id: 170420556,
+    raw_message: `${fixture.event.raw_message.replace('[CQ:at,qq=398276230]', '')} 瑞姬看看`,
+  };
+  let calls = 0;
+  const media = {
+    async ingestImage() {
+      calls += 1;
+      return { kind: 'image', localPath: 'F:/tmp/n.png', url: 'https://x/n', mime: 'image/png', name: 'n.png' };
+    },
+    async ingestFile() { return null; },
+  };
+  const normalizer = makeNormalizer({ wake: { ...WAKE, mode: 'at' }, mediaIngestor: media });
+  const { message } = await normalizer.normalize(event);
+
+  assert.equal(message.flags.isNameCall, true);
+  assert.equal(normalizer.isWake(message.flags), false, 'wake.mode=at 下 isWake 仍是 false');
+  assert.equal(calls, 1, '但名字呼唤照样落盘');
+  assert.equal(message.media[0].deferred, undefined);
+});
