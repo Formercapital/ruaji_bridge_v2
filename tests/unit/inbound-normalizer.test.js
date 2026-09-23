@@ -173,6 +173,84 @@ test('图文混排里的商城表情：CQ 码从 content 剔除，文字保留',
   assert.equal(message.media[0].label, '摸头');
 });
 
+test('商城表情（marketface）：与 mface 同管线，summary 当标签', async () => {
+  const fixture = loadFixture('private-mface');
+  const seg = {
+    ...fixture.event.message[0],
+    type: 'marketface',
+    data: { ...fixture.event.message[0].data, summary: '[贴贴]' },
+  };
+  const media = {
+    async ingestImage(data) {
+      assert.equal(data.url, seg.data.url, 'marketface 的 url 要传给图片摄取');
+      return { kind: 'image', localPath: 'F:/tmp/market.gif', url: data.url, mime: 'image/gif', name: 'x.gif' };
+    },
+    async ingestFile() { return null; },
+  };
+  const { message, dropped } = await makeNormalizer({ mediaIngestor: media }).normalize({
+    ...fixture.event,
+    raw_message: '[CQ:marketface,summary=&#91;贴贴&#93;,url=' + seg.data.url + ']',
+    message: [seg],
+  });
+
+  assert.equal(dropped, null);
+  assert.equal(message.media.length, 1);
+  assert.equal(message.media[0].kind, 'image');
+  assert.equal(message.media[0].label, '贴贴');
+  assert.equal(message.content, '[图片消息]');
+});
+
+test('引用他人商城表情（marketface）：引用摘要与引用图都不丢', async () => {
+  const fixture = loadFixture('group-reply-marketface');
+  const api = {
+    async getMsg(id) {
+      assert.equal(id, '146162334');
+      return fixture.quotedMessage;
+    },
+  };
+  const media = {
+    async ingestImage(data) {
+      return { kind: 'image', localPath: 'F:/tmp/q.gif', url: data.url, mime: 'image/gif', name: 'q.gif' };
+    },
+    async ingestFile() { return null; },
+  };
+  const { message } = await makeNormalizer({ napcatApi: api, mediaIngestor: media }).normalize(fixture.event);
+
+  assert.equal(message.flags.hasQuote, true, '修复前 quotedText 为空 → 引用整块被判空丢掉');
+  assert.equal(message.content, fixture.expect.content);
+  assert.ok(message.content.includes('[动画表情: 贴贴]'), '引用摘要要带上表情标签');
+  const quoteMedia = message.media.filter((m) => m.origin === 'quote');
+  assert.equal(quoteMedia.length, 1);
+  assert.equal(quoteMedia[0].kind, 'image');
+  assert.equal(quoteMedia[0].label, '贴贴');
+  assert.equal(message.extensions.quote.sourceMessageId, '146162334');
+});
+
+test('引用摘要兜底：原文取不到文本时也要带上已落盘的引用媒体', async () => {
+  const media = {
+    async ingestImage(data) {
+      return { kind: 'image', localPath: 'F:/tmp/q.gif', url: data.url, mime: 'image/gif', name: 'q.gif' };
+    },
+    async ingestFile() { return null; },
+  };
+  const n = makeNormalizer({ mediaIngestor: media });
+  // quotedText 显式给空，模拟修复前 segmentsToText 认不出 mface/marketface 的结果
+  const quote = await n._finishQuote({
+    replyId: '999200',
+    inlineText: '',
+    quotedNick: '御娘狼三千',
+    isBot: false,
+    quotedSegments: [{ type: 'mface', data: { summary: '[摸头]', url: 'https://x/q.gif' } }],
+    quotedText: '',
+  }, { ingest: true });
+
+  assert.ok(quote, '媒体已落盘时严禁返回 null（否则外层把 media 整块丢掉）');
+  assert.equal(quote.summary, '[引用 御娘狼三千 的消息: [动画表情: 摸头]]');
+  assert.equal(quote.media.length, 1);
+  assert.equal(quote.media[0].origin, 'quote');
+  assert.equal(quote.media[0].originAuthor, '御娘狼三千');
+});
+
 test('引用消息：拉取原文并前置到 content', async () => {
   const fixture = loadFixture('group-reply-quote');
   const api = {
@@ -520,7 +598,32 @@ test('_shouldIngestMedia：私聊恒落盘，群聊只看 @ / 叫名字 / 引用
   assert.equal(n._shouldIngestMedia({ ...base, isAtBot: true }), true);
   assert.equal(n._shouldIngestMedia({ ...base, isNameCall: true }), true);
   assert.equal(n._shouldIngestMedia({ ...base, quoteIsBot: true }), true);
+  assert.equal(n._shouldIngestMedia({ ...base, seeCommand: true }), true, '/see 显式要求看本地图，也要落盘');
   assert.equal(n._shouldIngestMedia(base), false, '严格意义上路过的群聊消息不落盘');
+});
+
+test('群聊显式 /see：没 @ 也预先把图落盘，好让渲染层给出本地路径', async () => {
+  const fixture = loadFixture('group-at-with-image');
+  let calls = 0;
+  const media = {
+    async ingestImage() {
+      calls += 1;
+      return { kind: 'image', localPath: 'F:/tmp/see.png', url: 'https://x/see', mime: 'image/png', name: 'see.png' };
+    },
+    async ingestFile() { return null; },
+  };
+  const event = {
+    ...fixture.event,
+    message_id: 170420558,
+    raw_message: fixture.event.raw_message.replace('[CQ:at,qq=398276230]', ' /see'),
+  };
+  const { message } = await makeNormalizer({ mediaIngestor: media }).normalize(event);
+
+  assert.equal(message.flags.isAtBot, false);
+  assert.equal(message.flags.isNameCall, false);
+  assert.equal(calls, 1, '/see 指令要触发落盘');
+  assert.equal(message.media[0].localPath, 'F:/tmp/see.png');
+  assert.equal(message.media[0].deferred, undefined);
 });
 
 test('群聊非唤醒图片：不落盘，只登记 deferred 描述符（含 fileId 与直链）', async () => {

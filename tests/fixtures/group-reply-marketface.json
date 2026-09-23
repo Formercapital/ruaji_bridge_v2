@@ -1,0 +1,49 @@
+{
+  "name": "group-reply-marketface",
+  "description": "引用他人商城表情（marketface）+ @ 机器人。修复前 segmentsToText 没有 marketface 分支，引用原文渲染为空 → _finishQuote 返回 null → 已落盘/已 defer 的引用图整块丢失。",
+  "source": "构造样本（对齐 LLBOT/NapCat marketface 段字段）",
+  "event": {
+    "post_type": "message",
+    "message_type": "group",
+    "sub_type": "normal",
+    "message_id": 146162902,
+    "self_id": 398276230,
+    "user_id": 2260757842,
+    "group_id": 793019665,
+    "time": 1787416390,
+    "raw_message": "[CQ:reply,id=146162334][CQ:at,qq=398276230] 看看这个",
+    "sender": {
+      "user_id": 2260757842,
+      "nickname": "御娘狼三千",
+      "card": "御娘狼三千",
+      "role": "member"
+    }
+  },
+  "quotedMessage": {
+    "message_id": 146162334,
+    "sender": { "user_id": 2260757842, "nickname": "御娘狼三千", "card": "御娘狼三千" },
+    "message": [
+      {
+        "type": "marketface",
+        "data": {
+          "summary": "[贴贴]",
+          "url": "https://gxh.vip.qq.com/club/item/parcel/item/aa/aabbccddeeff00112233445566778899/raw300.gif",
+          "emoji_id": "aabbccddeeff00112233445566778899",
+          "emoji_package_id": 244243,
+          "key": "deadbeefdeadbeef"
+        }
+      }
+    ]
+  },
+  "quotedRawMessage": "[CQ:marketface,summary=&#91;贴贴&#93;,url=https://gxh.vip.qq.com/club/item/parcel/item/aa/aabbccddeeff00112233445566778899/raw300.gif,emoji_id=aabbccddeeff00112233445566778899,emoji_package_id=244243,key=deadbeefdeadbeef]",
+  "expect": {
+    "dropped": null,
+    "content": "[引用 御娘狼三千 的消息: [动画表情: 贴贴]] @瑞姬 看看这个",
+    "flags": {
+      "isAtBot": true,
+      "hasQuote": true,
+      "hasImage": true
+    },
+    "quoteMediaLabel": "贴贴"
+  }
+}

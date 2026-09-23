@@ -229,11 +229,25 @@ export function formatCardSummary(type, data = {}) {
   return '';
 }
 
+/**
+ * 商城表情（mface / marketface）的可读标注。
+ *
+ * summary 形如 "[摸头]"（CQ 码里被转义成 &#91;摸头&#93;，parseCqParams 已还原），
+ * 剥掉方括号当标签，避免摘要里套出 `[[摸头]]`。缺 summary 时退回 name/text。
+ */
+export function formatMarketFaceSummary(params = {}) {
+  const raw = params.summary ?? params.name ?? params.text ?? '';
+  const label = String(raw).replace(/^\[+|\]+$/g, '').trim();
+  return label ? `[动画表情: ${label}]` : '[动画表情]';
+}
+
 /** 把媒体类 CQ 码转成可读文字标注，用于引用消息摘要 */
 export function annotateCqCodes(rawMessage) {
   const withCards = replaceCqCards(rawMessage);
   return String(withCards ?? '')
     .replace(/\[CQ:image[^\]]*\]/g, '[图片]')
+    .replace(/\[CQ:(?:mface|marketface)((?:,[^\]]*)*)\]/gi, (_m, paramStr) =>
+      formatMarketFaceSummary(parseCqParams(paramStr)))
     .replace(/\[CQ:file[^\]]*\]/g, '[文件]')
     .replace(/\[CQ:face[^\]]*\]/g, '[表情]')
     .replace(new RegExp(AT_CQ_SOURCE, 'gi'), (_m, paramStr) => renderAtMention(parseCqParams(paramStr)))
@@ -377,6 +391,9 @@ export function segmentsToText(segments) {
       switch (seg.type) {
         case 'text': return seg.data?.text ?? '';
         case 'image': return '[图片]';
+        // 商城表情没有图片本体可读，但 summary（"[摸头]"）就是现成的语义标签
+        case 'mface':
+        case 'marketface': return formatMarketFaceSummary(seg.data ?? {});
         case 'file':
         case 'offline_file': return `[文件: ${seg.data?.name ?? '未知'}]`;
         case 'face': return '[表情]';

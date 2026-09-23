@@ -402,7 +402,7 @@ function imageTokensOf(inbound) {
   const items = own.length > 0
     ? own
     : (inbound.segments ?? [])
-        .filter((s) => s?.type === 'image' || s?.type === 'mface')
+        .filter((s) => s?.type === 'image' || s?.type === 'mface' || s?.type === 'marketface')
         .map((s) => ({ url: s.data?.url, localPath: s.data?.file }));
 
   const tokens = items.map((m) => {
