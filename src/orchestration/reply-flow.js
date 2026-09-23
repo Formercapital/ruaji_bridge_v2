@@ -80,6 +80,8 @@ export class ReplyFlow {
       identity: this.config.identity,
       triggerType,
       affectionContext,
+      // 面板/config 现读：false 时图片不直挂多模态 parts，改给路径 + vision_analyze 提示
+      directMediaParts: this.config.context?.directMediaParts !== false,
     });
 
     const messages = [];

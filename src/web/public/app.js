@@ -1152,6 +1152,8 @@ async function renderSettings() {
     ?? '瑞姬去休息啦，{minutes}分钟再来找她吧';
   $('#cfg-context-total-budget').value = d.config.context?.totalCharacterBudget ?? 12000;
   $('#cfg-context-source-budget').value = d.config.context?.perSourceCharacterBudget ?? 4000;
+  // 默认勾选（＝直挂多模态，旧行为）；只有显式保存成 false 才取消勾选
+  $('#cfg-context-direct-parts').checked = d.config.context?.directMediaParts !== false;
 
   // 6. NapCat 与运行模式
   $('#cfg-mode').value = d.config.mode ?? 'live';
@@ -1297,6 +1299,7 @@ async function saveSettings() {
       context: {
         totalCharacterBudget: Number($('#cfg-context-total-budget').value) || 12000,
         perSourceCharacterBudget: Number($('#cfg-context-source-budget').value) || 4000,
+        directMediaParts: $('#cfg-context-direct-parts').checked,
       },
       reply: {
         sendEnabled: $('#cfg-reply-send').checked,

@@ -35,6 +35,18 @@ test('role precedence and command matrix default deny admins, unknown commands a
   for (const role of ['owner', 'admin', 'member']) assert.equal(canUseCommand(role, '/future', { adminCommands: ['/future'] }), false);
 });
 
+test('/see 是放行的渲染修饰符：member 能用、命中即 forward 给模型不产生回复', async () => {
+  assert.equal(findCommand('/see')?.id, '/see');
+  assert.equal(findCommand('/see 这张图')?.id, '/see');
+  assert.equal(canUseCommand('member', '/see', identity), true);
+  assert.equal(canUseCommand('admin', '/see', identity), false, '管理员需显式授权，与其他命令同口径');
+
+  const flow = new CommandFlow({ config: { identity: { ...identity, adminCommands: [] } }, logger });
+  const inbound = message('/see 这张图', '3');
+  assert.deepEqual(await flow.handle(inbound), { handled: false, command: null });
+  assert.equal(inbound.flags.isCommand, true, '登记过才会回填 isCommand；forward 不产生回复');
+});
+
 test('every alias is gated before dispatch and Favour relay; grants are live and canonical', async () => {
   for (const favourUltraEnabled of [false, true]) {
     const config = { identity: { ...identity, adminCommands: [] }, favourUltraEnabled };
@@ -50,7 +62,9 @@ test('every alias is gated before dispatch and Favour relay; grants are live and
         assert.equal(executions, before);
         config.identity.adminCommands = [entry.id];
         await flow.handle(message(alias));
-        assert.equal(executions - before, entry.adminGrantable ? 1 : 0);
+        // forward 命令（/approve、/see）只放行给模型/下游，不执行任何 handler；
+        // 其余 adminGrantable 命令被授权后应当真的跑一次 handler。
+        assert.equal(executions - before, entry.adminGrantable && !entry.forward ? 1 : 0);
       }
     }
     const before = executions;

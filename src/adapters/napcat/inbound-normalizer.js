@@ -27,6 +27,7 @@ import {
 } from '../../contracts/messages.js';
 import { validateNapcatEvent } from '../../contracts/schemas/index.js';
 import { getIdentityRole } from '../../core/permission-policy.js';
+import { isSeeCommand } from '../../core/see-command.js';
 import {
   parseCqMessage,
   parseCqParams,
@@ -131,15 +132,28 @@ export class InboundNormalizer {
     // 自己"之后才能决定本条消息的媒体要不要落盘（见 _shouldIngestMedia）。
     const quoteSource = await this._resolveQuoteSource(segments, rawMessage, { signal: ctx.signal });
 
+    // /see 显式指令：本条正文或引用正文带 /see 时，即便群里没被 @ 也预先把图落盘——
+    // 渲染层（prompt-renderer）要用本地绝对路径引导模型调识图工具读图，没有本地
+    // 副本的话隔离指令就落空了。命中判定统一在 core/see-command.js。
+    const seeCommand = isSeeCommand(
+      {
+        text,
+        content: text,
+        extensions: { quote: quoteSource?.quotedText ? { summary: quoteSource.quotedText } : null },
+      },
+      { botName: this.identity.botName },
+    );
+
     // 媒体落盘策略（附录 2 + 2026-09 群聊收敛）：私聊照旧全收；群聊只在被唤醒
-    // （@ 机器人 / 叫机器人名字）或引用了机器人自己的消息时落盘。群里普通路过的
-    // 图片/文件只登记"未下载"描述符，需要时由模型用 download_group_file /
+    // （@ 机器人 / 叫机器人名字）、引用了机器人自己的消息或显式 /see 时落盘。群里
+    // 普通路过的图片/文件只登记"未下载"描述符，需要时由模型用 download_group_file /
     // download_chat_file / get_image_detail 主动拉取。
     const ingest = this._shouldIngestMedia({
       messageType,
       isAtBot,
       isNameCall,
       quoteIsBot: quoteSource?.isBot === true,
+      seeCommand,
     });
 
     const media = ingest
@@ -239,10 +253,10 @@ export class InboundNormalizer {
         if (seg.type === 'image') {
           const item = await this.media.ingestImage(seg.data, { signal });
           if (item) out.push(item);
-        } else if (seg.type === 'mface') {
-          // QQ 商城表情（LLBOT/NapCat 的 mface 段）。data.url 是 raw*.gif 直链，
-          // 走同一条图片管线；summary（如 "[摸头]"）是现成的标签线索，
-          // 剥掉方括号挂到 label 上，表情包收集入库时当初始标签。
+        } else if (seg.type === 'mface' || seg.type === 'marketface') {
+          // QQ 商城表情（LLBOT/NapCat 的 mface / marketface 段）。data.url 是
+          // raw*.gif 直链，走同一条图片管线；summary（如 "[摸头]"）是现成的
+          // 标签线索，剥掉方括号挂到 label 上，表情包收集入库时当初始标签。
           const item = await this.media.ingestImage(seg.data, { signal });
           if (item) {
             item.label = String(seg.data?.summary ?? '').replace(/^\[+|\]+$/g, '').trim() || null;
@@ -266,7 +280,8 @@ export class InboundNormalizer {
    * 只有这条消息真的会被机器人看到时才值得预先备好本地副本：
    *   - 私聊：全部落盘（与改动前一致）；
    *   - 群聊里 @ 了机器人 / 叫了机器人名字：落盘；
-   *   - 群聊引用了机器人自己的消息：落盘（被引用的原消息里也可能带图/文件）。
+   *   - 群聊引用了机器人自己的消息：落盘（被引用的原消息里也可能带图/文件）；
+   *   - 群聊显式 /see：落盘（用户要求隔离出上下文让模型读本地文件打标）。
    * 其余群聊消息只产出 deferred 描述符（见 _deferredMediaOf）。
    *
    * 这里刻意**不看 wake.mode**：@ 在 decision-flow 里是硬优先级（at_overrides_
@@ -274,9 +289,9 @@ export class InboundNormalizer {
    * 判 direct——两者都可能真的被回复。按 wake.mode 卡落盘会出现"瑞姬已经准备
    * 回这条了，却看不到消息里的图"。
    */
-  _shouldIngestMedia({ messageType, isAtBot, isNameCall, quoteIsBot }) {
+  _shouldIngestMedia({ messageType, isAtBot, isNameCall, quoteIsBot, seeCommand }) {
     if (messageType !== MESSAGE_TYPES.GROUP) return true;
-    return isAtBot === true || isNameCall === true || quoteIsBot === true;
+    return isAtBot === true || isNameCall === true || quoteIsBot === true || seeCommand === true;
   }
 
   /**
@@ -290,7 +305,7 @@ export class InboundNormalizer {
     const out = [];
     for (const seg of segments ?? []) {
       const data = seg?.data ?? {};
-      if (seg.type === 'image' || seg.type === 'mface') {
+      if (seg.type === 'image' || seg.type === 'mface' || seg.type === 'marketface') {
         const item = {
           kind: 'image',
           localPath: null,
@@ -301,7 +316,7 @@ export class InboundNormalizer {
           sizeBytes: positiveNumberOrNull(data.file_size ?? data.size),
           deferred: true,
         };
-        if (seg.type === 'mface') {
+        if (seg.type === 'mface' || seg.type === 'marketface') {
           // 与落盘路径同款：summary（如 "[摸头]"）剥掉方括号当初始标签
           item.label = String(data.summary ?? '').replace(/^\[+|\]+$/g, '').trim() || null;
         }
@@ -406,6 +421,15 @@ export class InboundNormalizer {
       summary = `[引用 ${quotedNick} 发送的文件]:\n${fileSummaries}`;
     } else if (inlineText) {
       summary = `[引用消息: ${inlineText}]`;
+    } else {
+      // 防御：原文取不到文本，但媒体已经落盘（如商城表情 mface/marketface、
+      // 图片没有可读标签）时，仍要合成一句引用摘要。否则 summary 为空 → 返回
+      // null → 外层把已经下载好的 quote.media 整块丢掉（引用图“凭空消失”）。
+      const imgLabels = media
+        .filter((m) => m.kind === 'image')
+        .map((m) => (m.label ? `[动画表情: ${m.label}]` : '[图片]'))
+        .join(' ');
+      if (imgLabels) summary = `[引用 ${quotedNick} 的消息: ${imgLabels || '[图片]'}]`;
     }
 
     return summary ? { messageId: replyId, summary, media } : null;
@@ -418,6 +442,7 @@ export class InboundNormalizer {
   _buildContent({ rawMessage, quote, media, isAtBot = false }) {
     let clean = rawMessage
       .replace(/\[CQ:image,[^\]]*\]/g, '')
+      .replace(/\[CQ:(?:mface|marketface)[^\]]*\]/gi, '')
       .replace(/\[CQ:file,[^\]]*\]/g, '')
       .replace(/\[CQ:reply,[^\]]*\]/g, '')
       .trim();

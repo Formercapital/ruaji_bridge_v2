@@ -151,6 +151,8 @@ export function createSandboxApi(deps) {
           identity: config.identity,
           triggerType: decision.triggerType,
           affectionContext,
+          // 与 reply-flow 同口径：面板关掉直挂后，沙箱也要如实呈现纯文本路径提示
+          directMediaParts: config.context?.directMediaParts !== false,
         });
         const messages = [];
         if (systemText && systemText.trim()) {

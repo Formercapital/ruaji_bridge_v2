@@ -7,6 +7,7 @@ import {
   renderUserContent,
   renderUserMessage,
   renderLocalMediaHint,
+  renderAttachedMediaToolHint,
   formatMsgTime,
   groupBySlot,
   partitionExtra,
@@ -17,6 +18,7 @@ import {
   NON_ADMIN_TOOL_BUDGET_COMMAND,
   AFF_MARKER_RULE,
 } from '../../src/orchestration/prompt-renderer.js';
+import { SEE_MODE_NOTICE, isSeeCommand } from '../../src/core/see-command.js';
 import { mergeBatch } from '../../src/orchestration/inbound-flow.js';
 import { SessionStore } from '../../src/storage/session-store.js';
 import { createContextBlock } from '../../src/contracts/context-block.js';
@@ -814,4 +816,135 @@ test('没有 deferred 项时 Prompt 一字不变（不改动私聊/唤醒消息�
   const inbound = makeInbound({ media: [{ kind: 'image', localPath: 'F:/a.png' }] });
   const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY });
   assert.ok(!JSON.stringify(out).includes('未下载的媒体'));
+});
+
+// ===== directMediaParts=false：图片不直挂多模态，改为路径 + 工具提示 =====
+
+test('directMediaParts=false 时不推 image_url，改为本地路径 + vision_analyze 提示', () => {
+  const inbound = makeInbound({
+    media: [{ kind: 'image', localPath: 'F:/received_images/a.png', url: 'https://x/y.png' }],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: false });
+
+  assert.equal(typeof out, 'string', '关闭直挂后必须是纯文本，不能有 image_url part');
+  assert.ok(!JSON.stringify(out).includes('image_url'), '任何位置都不得残留 image_url');
+  assert.ok(out.includes('F:/received_images/a.png'), '要给本地绝对路径');
+  assert.ok(out.includes('vision_analyze'), '要提示模型按需调用图片分析工具');
+  assert.ok(out.includes('[图1:'), '归属说明牌要保留');
+  assert.ok(!out.includes('https://x/y.png'), '有本地副本时优先给本地路径而非直链');
+});
+
+test('directMediaParts=false 时引用机器人自己的图仍保留归属说明', () => {
+  const inbound = makeInbound({
+    media: [{ kind: 'image', origin: 'quote', originAuthor: '瑞姬', originIsBot: true, localPath: 'F:/received_images/q.png' }],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: false });
+
+  assert.ok(out.includes('原作者: 瑞姬'));
+  assert.ok(out.includes('即你自己'));
+  assert.ok(out.includes('并非本条消息发送者发来的'));
+  assert.equal(typeof out, 'string');
+});
+
+test('directMediaParts=false 且无本地副本时退回下载直链提示', () => {
+  const inbound = makeInbound({ media: [{ kind: 'image', url: 'https://x/only.png' }] });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: false });
+
+  assert.ok(out.includes('https://x/only.png'));
+  assert.ok(out.includes('vision_analyze'));
+});
+
+test('directMediaParts=false 与 deferred 混排：都进纯文本，仍不产生 parts', () => {
+  const inbound = makeInbound({
+    media: [
+      { kind: 'image', localPath: 'F:/received_images/a.png', origin: 'message', originAuthor: '甲' },
+      { kind: 'image', deferred: true, localPath: null, url: 'https://x/y.png', fileId: 'B.png' },
+    ],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: false });
+
+  assert.equal(typeof out, 'string');
+  assert.ok(out.includes('F:/received_images/a.png'), '已落盘图给路径');
+  assert.ok(out.includes('vision_analyze'));
+  assert.ok(out.includes('[未下载的媒体]'), 'deferred 图仍走工具回捞提示');
+  assert.ok(out.includes('get_image_detail(file=B.png)'));
+});
+
+test('directMediaParts=false 且无图时 Prompt 一字不变', () => {
+  const out = renderUserMessage({ inbound: makeInbound(), contextBlocks: [], identity: IDENTITY, directMediaParts: false });
+  assert.equal(typeof out, 'string');
+  assert.ok(!out.includes('vision_analyze'));
+  assert.ok(!out.includes('收到图片'));
+});
+
+test('renderAttachedMediaToolHint 对空/无位置信息的图返回空串', () => {
+  assert.equal(renderAttachedMediaToolHint([]), '');
+  assert.equal(renderAttachedMediaToolHint(undefined), '');
+  assert.equal(renderAttachedMediaToolHint([{ kind: 'image' }]), '');
+});
+
+// ===== /see：显式把图片隔离出主上下文，强制走本地识图工具 =====
+
+/** 一条带本地副本图片、正文可覆写的群消息 */
+function seeInbound(overrides = {}) {
+  return makeInbound({
+    media: [{ kind: 'image', localPath: 'F:/received_images/see.png', url: 'https://x/see.png', origin: 'message', originAuthor: '甲' }],
+    ...overrides,
+  });
+}
+
+test('isSeeCommand：正文 /see / 名字呼唤 / 引用正文 / 合并批次命中，/seems 不误判', () => {
+  assert.equal(isSeeCommand(seeInbound({ text: '/see', content: '/see' }), { botName: '瑞姬' }), true);
+  assert.equal(isSeeCommand(seeInbound({ text: '/see 这张图', content: '/see 这张图' }), { botName: '瑞姬' }), true);
+  assert.equal(isSeeCommand(seeInbound({ text: '瑞姬 /see 这张图', content: '瑞姬 /see 这张图' }), { botName: '瑞姬' }), true, '带名字呼唤前缀同样命中');
+  assert.equal(isSeeCommand(seeInbound({ text: '', content: '', extensions: { quote: { summary: '[引用 甲 的消息: /see 帮我看看]' } } }), { botName: '瑞姬' }), true, '引用正文带 /see 也算命中');
+  assert.equal(isSeeCommand(seeInbound({ text: '', content: '', extensions: { batch: [{ content: '/see 这张图' }] } }), { botName: '瑞姬' }), true, '防抖合并批次任意一条命中即命中');
+  assert.equal(isSeeCommand(seeInbound({ text: '/seems fine', content: '/seems fine' }), { botName: '瑞姬' }), false, '/seems 不是指令');
+  assert.equal(isSeeCommand(seeInbound({ text: '看看 /see 这个词', content: '看看 /see 这个词' }), { botName: '瑞姬' }), false, '非行首的 /see 不当作指令');
+  assert.equal(isSeeCommand(null), false);
+});
+
+test('/see 命中时即使 directMediaParts=true 也绝不挂 image_url，末尾注入强指令', () => {
+  const inbound = seeInbound({ text: '/see 这张图', content: '/see 这张图' });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: true });
+
+  assert.equal(typeof out, 'string', '/see 后必须是纯文本，不能有 image_url part');
+  assert.ok(!JSON.stringify(out).includes('image_url'), '任何位置都不得残留 image_url');
+  assert.ok(out.includes('F:/received_images/see.png'), '必须给出本地绝对路径');
+  assert.ok(out.includes('vision_analyze'), '必须指向本地识图工具');
+  assert.ok(out.includes('[图1:'), '归属说明牌保留');
+  assert.ok(out.endsWith(SEE_MODE_NOTICE), '强指令必须排在 Prompt 末尾');
+});
+
+test('/see 无图也会注入强指令（用户显式发起，不得静默失效）', () => {
+  const inbound = makeInbound({ text: '/see', content: '/see', media: [] });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: true });
+  assert.equal(typeof out, 'string');
+  assert.ok(out.endsWith(SEE_MODE_NOTICE));
+});
+
+test('/see 与 deferred 混排：已落盘图给路径，未落盘图仍走回捞提示', () => {
+  const inbound = makeInbound({
+    text: '/see 两张图',
+    content: '/see 两张图',
+    media: [
+      { kind: 'image', localPath: 'F:/received_images/a.png', origin: 'message', originAuthor: '甲' },
+      { kind: 'image', deferred: true, localPath: null, url: 'https://x/b.png', fileId: 'B.png' },
+    ],
+  });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: true });
+
+  assert.equal(typeof out, 'string');
+  assert.ok(out.includes('F:/received_images/a.png'), '已落盘图给路径');
+  assert.ok(out.includes('[未下载的媒体]'), 'deferred 图仍走工具回捞提示');
+  assert.ok(out.includes('get_image_detail(file=B.png)'));
+  assert.ok(out.endsWith(SEE_MODE_NOTICE));
+});
+
+test('directMediaParts=true 且未命中 /see 时照旧走多模态 parts（回归）', () => {
+  const inbound = seeInbound({ text: '这张图好看吗', content: '这张图好看吗' });
+  const out = renderUserMessage({ inbound, contextBlocks: [], identity: IDENTITY, directMediaParts: true });
+  assert.ok(Array.isArray(out), '默认行为不变：有图就是多模态 parts');
+  assert.ok(JSON.stringify(out).includes('image_url'));
+  assert.ok(!JSON.stringify(out).includes(SEE_MODE_NOTICE));
 });

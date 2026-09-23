@@ -132,6 +132,8 @@ export function createConfigApi(deps) {
           totalCharacterBudget: config.context?.totalCharacterBudget ?? 12000,
           perSourceCharacterBudget: config.context?.perSourceCharacterBudget ?? 4000,
           collectTimeoutMs: config.context?.collectTimeoutMs ?? 5000,
+          // 默认 true（旧行为）：图片直接挂 image_url 多模态 parts
+          directMediaParts: config.context?.directMediaParts !== false,
         },
         reply: {
           sendEnabled: Boolean(config.reply?.sendEnabled),
@@ -535,6 +537,10 @@ export function createConfigApi(deps) {
           totalCharacterBudget: updates.context.totalCharacterBudget != null ? Number(updates.context.totalCharacterBudget) : (diskConfig.context?.totalCharacterBudget ?? 12000),
           perSourceCharacterBudget: updates.context.perSourceCharacterBudget != null ? Number(updates.context.perSourceCharacterBudget) : (diskConfig.context?.perSourceCharacterBudget ?? 4000),
           collectTimeoutMs: updates.context.collectTimeoutMs != null ? Number(updates.context.collectTimeoutMs) : (diskConfig.context?.collectTimeoutMs ?? 5000),
+          // 渲染层现读 config.context.directMediaParts，落盘 + 下面 Object.assign 即热生效
+          directMediaParts: updates.context.directMediaParts != null
+            ? Boolean(updates.context.directMediaParts)
+            : (diskConfig.context?.directMediaParts !== false),
         };
       }
 

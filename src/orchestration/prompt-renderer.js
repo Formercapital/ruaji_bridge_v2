@@ -14,6 +14,7 @@
 import { TRIGGER_TYPES } from '../contracts/capabilities.js';
 import { MESSAGE_TYPES } from '../contracts/messages.js';
 import { getIdentityRole } from '../core/permission-policy.js';
+import { SEE_MODE_NOTICE, isSeeCommand } from '../core/see-command.js';
 
 /** 三段固定的交互情境提示（bridge.js:769-774），仅群聊注入 */
 export const TRIGGER_NOTICES = Object.freeze({
@@ -323,8 +324,24 @@ export function renderUserContent({ inbound, contextBlocks, identity }) {
  * 引用消息拉回来的图如果裸 append，会被误读成发送者发的（2026-09-10 案例：
  * 群友引用瑞姬发的表情包，Hermes 以为对方在给她发图）。归属必须写成文本、
  * 且紧贴图片本身——远距离指代（"下方第一张图是…"）在多图场景不可靠。
+ *
+ * directMediaParts=false（config.context.directMediaParts）时不再推 image_url，
+ * 改为纯文本的「本地路径 + 归属 + vision_analyze 提示」——图片直传进上下文会在
+ * Google 等主模型的输入端触发内容安全策略，工具侧读图则不受影响。
+ *
+ * /see 指令（core/see-command.js）是同一路径的显式触发：即使 directMediaParts
+ * 为 true，也强制禁止挂 image_url，并在 Prompt 末尾追加 SEE_MODE_NOTICE 强指令，
+ * 让模型必须调本地识图工具读取路径分析（需要隔离大尺度/敏感图或精准打标时用）。
  */
-export function renderUserMessage({ inbound, contextBlocks, identity, triggerType, affectionContext }) {
+export function renderUserMessage({
+  inbound,
+  contextBlocks,
+  identity,
+  triggerType,
+  affectionContext,
+  /** 是否把已落盘图片直接以 image_url 多模态 part 挂进请求；false = 只给路径与工具提示 */
+  directMediaParts = true,
+}) {
   const content = renderUserContent({ inbound, contextBlocks, identity });
   const dynamicContext = renderDynamicContext({ inbound, contextBlocks, triggerType, affectionContext, identity });
   let text = dynamicContext ? `${dynamicContext}\n\n${content}` : content;
@@ -335,6 +352,19 @@ export function renderUserMessage({ inbound, contextBlocks, identity, triggerTyp
   // 只把真的拿到本地副本/直链的图挂进 parts。deferred 图也常常带 url，但挂上去
   // 等于绕过了"群聊不无差别接收媒体"的策略（Hermes 会去拉整张图），必须排除。
   const images = (inbound.media ?? []).filter((m) => m.kind === 'image' && m.deferred !== true);
+
+  // /see 显式指令优先于全局开关：命中就强制走纯文本路径，末尾追加隔离强指令。
+  const seeMode = isSeeCommand(inbound, { botName: identity?.botName });
+
+  // 关闭直挂多模态，或命中 /see：一张 image_url 都不推，改成路径 + 工具提示
+  if (directMediaParts === false || seeMode) {
+    const toolHint = renderAttachedMediaToolHint(images);
+    if (toolHint) text = `${text}\n\n${toolHint}`;
+    // 强指令必须排在最后：模型对末尾指令的执行率最高
+    if (seeMode) text = `${text}\n\n${SEE_MODE_NOTICE}`;
+    return text;
+  }
+
   if (images.length === 0) return text;
 
   const parts = [{ type: 'text', text }];
@@ -352,6 +382,37 @@ export function renderUserMessage({ inbound, contextBlocks, identity, triggerTyp
     attached += 1;
   }
   return parts;
+}
+
+/**
+ * 已落盘图片的「按需查看」提示（config.context.directMediaParts=false 时使用）。
+ *
+ * 不把图片挂进多模态 parts，只报本地绝对路径（无本地副本时退回直链），并明确
+ * 指示模型需要看图时自己调 vision_analyze —— 图片此时只是工具调用的输入，绕开了
+ * 主模型输入端的图片内容安全审核。归属说明牌一并保留，引用转发来的图仍能被正确
+ * 归属。无本地路径/直链的图跳过（与 parts 路径「挂不上就跳过说明牌」同口径）。
+ *
+ * @param {object[]} images 已排除 deferred 的 media item
+ * @returns {string} 没有可提示的图时返回空串，Prompt 一字不变
+ */
+export function renderAttachedMediaToolHint(images) {
+  const items = (images ?? []).filter((m) => m && (m.localPath || m.url));
+  if (!items.length) return '';
+
+  const lines = items.map((image, index) => {
+    let detail;
+    if (image.localPath) {
+      detail = `本地绝对路径: ${image.localPath}`;
+    } else {
+      detail = `下载直链: ${image.url}`;
+    }
+    return `- ${imageOriginLabel(image, index)} ${detail}；若需查看图片内容，请自行调用 vision_analyze 图片分析工具读取后分析，不要凭空猜测`;
+  });
+
+  return [
+    '[收到图片: 未直接附在消息里，仅提供位置信息] 以下图片随本条消息到达但没有直接喂给你。需要看内容时再调工具主动读取：',
+    ...lines,
+  ].join('\n');
 }
 
 /**

@@ -691,6 +691,12 @@
                 <span class="field-desc">防止单一插件或滑窗撑爆上下文</span>
               </label>
             </div>
+            <div class="field-row-checks">
+              <label class="check">
+                <input type="checkbox" id="cfg-context-direct-parts"> 图片直接以多模态 parts 注入上下文（关闭后改给本地路径，由模型按需调用 vision_analyze）
+              </label>
+              <span class="field-desc" style="margin-left:26px">关闭可规避 Google 等主模型输入端的内容安全拦截（图片直传进上下文会触发 Prohibited Use 报错）；关闭后图片仅作为工具调用输入，由模型需要时主动读图</span>
+            </div>
           </div>
         </div>
 

@@ -5,6 +5,10 @@ const definitions = [
   { id: '/new', aliases: ['/new', '///new', '////new', '#new'], handler: '_resetSession' },
   { id: '/model', aliases: ['/model', '///model'], arguments: true, handler: '_modelCommand' },
   { id: '/approve', aliases: ['/approve', '/approval', '/deny', '/reject'], arguments: true, forward: true },
+  // /see：不是独立命令，而是"本轮图片隔离出主上下文"的渲染修饰符。forward 放行
+  // 给模型，memberAllowed 让非主人也能用（纯渲染开关，无越权面）。命中判定在
+  // core/see-command.js，渲染在 orchestration/prompt-renderer.js。
+  { id: '/see', aliases: ['/see'], arguments: true, forward: true, adminGrantable: true, memberAllowed: true },
   { id: '/stop', aliases: ['/stop', '#stop', '/停下'], handler: '_stopGeneration', adminGrantable: true },
   { id: '/好感度', aliases: ['/好感', '/好感度', '/affection'], arguments: true, handler: '_affectionStats', favour: true, adminGrantable: true, memberAllowed: true },
   { id: '/查看画像', aliases: ['/查看画像', '/画像详情'], arguments: true, handler: '_viewPortrayal', adminGrantable: true, memberAllowed: true },
