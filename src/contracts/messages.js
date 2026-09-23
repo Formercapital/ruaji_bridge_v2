@@ -121,6 +121,11 @@ export function createModelRequest(input = {}) {
     sessionId: input.sessionId,
     /** Hermes 会话隔离键，adapter 内部翻译成 X-Hermes-Session-Id */
     sessionKey: input.sessionKey || null,
+    /**
+     * 直接指定上游会话 id（优先于 sessionKey 派生）。用于“对已有会话补发一轮”
+     * 的场景（唤醒自投递），避免会话轮换（日期 tag / /new）后落到另一个会话上。
+     */
+    sessionOverrideId: input.sessionOverrideId || null,
     model: input.model,
     messages: Array.isArray(input.messages) ? input.messages : [],
     contextBlocks: Array.isArray(input.contextBlocks) ? input.contextBlocks : [],

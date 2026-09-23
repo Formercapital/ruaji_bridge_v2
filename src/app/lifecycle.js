@@ -76,6 +76,8 @@ export class Lifecycle {
       this.c.pluginRegistry.loadFromConfig(config.plugins, config.pluginPolicy ?? {});
       this.c.sender.start();
       this.c.mem0Ingestor?.start();
+      // 异步唤醒回推：轮询 Hermes 会话 transcript，把后台任务完成通知推回 QQ
+      this.c.wakeFlow?.start();
       await this.c.health.listen(config.health.port);
       if (this.c.webServer) {
         await this.c.webServer.listen(config.web.port, config.web.host);
@@ -116,6 +118,7 @@ export class Lifecycle {
     this.log.info('RUAJI Bridge v2 已就绪', {
       healthPort: config.health.port,
       webPanel: this.c.webServer ? `http://${config.web.host}:${config.web.port}/` : '(未启用)',
+      wakeDelivery: config.wakeDelivery?.enabled ? `轮询 ${config.wakeDelivery.pollIntervalMs}ms` : '未启用',
       plugins: this.c.pluginRegistry.list().filter((p) => p.enabled).map((p) => p.id),
     });
     return this;
@@ -167,6 +170,7 @@ export class Lifecycle {
     // 顺序：先断消息流，再排空发送队列，最后落盘
     try { this.c.websocket.close(); } catch { /* ignore */ }
     this.c.inboundFlow.stopQueueSweeper();
+    this.c.wakeFlow?.stop();
     this.c.inputStatus?.stop();
     this.c.sessionStore.clearAllTimers();
     try { this.c.sender.stop(); } catch { /* ignore */ }

@@ -27,6 +27,10 @@
   - **全链路追踪**：按 ID/内容检索消息树状时序与各步骤详细耗时。
   - **好感度看板**：可视化查看好感度阶段与手动微调。
   - **客制化设置**：无需重启，直接在网页上修改模型、主人QQ、唤醒词、识图模型与协议端配置，支持一键连通性测速。
+- ⏰ **后台任务异步唤醒回推**（`wakeDelivery`，见 [docs/hermes-async-wake.md](docs/hermes-async-wake.md)）：
+  - `terminal(background=true, notify_on_complete=true)` / `watch_patterns` 跑完后，Hermes 会把完成通知自投递成一次唤醒轮写回会话 transcript，桥接轮询取回并推回它原本所在的 QQ 群 / 私聊——不再需要人追问一句"好了吗"。
+  - `delegate_task(background=true)` 跑完后 Hermes 只落一条写给 agent 的内部汇报行、**不会**起唤醒轮；桥接把它当作锚点，以同一会话自投递一次唤醒轮让瑞姬用自己的口吻转述（`wakeDelivery.delegationRelay`，只发极简提示、不重复内嵌报告正文），内部汇报行永不原样推给 QQ。
+  - 需要两侧同时开：Hermes `platforms.api_server.extra.async_delivery: true` + 本侧 `wakeDelivery.enabled: true`。游标与去重记录落盘，桥接重启只补发没推过的通知，绝不复读。
 
 ---
 

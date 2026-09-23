@@ -25,7 +25,9 @@ import { InboundNormalizer } from '../adapters/napcat/inbound-normalizer.js';
 import { Sender } from '../adapters/napcat/sender.js';
 import { InputStatus } from '../adapters/napcat/input-status.js';
 import { createModelAdapter, ModelRouter } from '../adapters/model/model-router.js';
+import { HermesSessionApi } from '../adapters/hermes/hermes-api.js';
 import { ModelSessionStore } from '../storage/model-session-store.js';
+import { WakeCursorStore } from '../storage/wake-cursor-store.js';
 import { OpenAiCompatibleAdapter } from '../adapters/model/openai-compatible.js';
 
 import { AffectionStore } from '../storage/affection-store.js';
@@ -46,6 +48,8 @@ import { ReplyFlow } from '../orchestration/reply-flow.js';
 import { CommandFlow } from '../orchestration/command-flow.js';
 import { InboundFlow } from '../orchestration/inbound-flow.js';
 import { FastAckDispatcher } from '../orchestration/fast-ack.js';
+import { WakeFlow } from '../orchestration/wake-flow.js';
+import { ReplyAnchorTracker } from '../orchestration/reply-anchor-tracker.js';
 import { Mem0Ingestor } from '../orchestration/mem0-ingestor.js';
 import { ShadowRecorder } from '../shadow/comparator.js';
 import { TraceCollector } from '../web/trace-collector.js';
@@ -119,6 +123,15 @@ export function createContainer(config, overrides = {}) {
   const sendQueueStore = new SendQueueStore({
     cacheDir: config.paths.cacheDir,
     maxAgeMs: config.reply.maxSendAgeMs,
+    logger,
+  });
+  /** 异步唤醒回推的游标/去重记录（必须持久化：重启后只补发没投递过的通知） */
+  const wakeCursorStore = new WakeCursorStore({
+    cacheDir: config.paths.cacheDir,
+    retainDays: config.wakeDelivery?.retainDays,
+    // 与好感度/画像这类"用户数据"不同，这是运行态游标：影子模式下也照写，
+    // 否则同一份通知在重启后会再推一遍（live 模式切回非影子时就会真实复读）。
+    persistEnabled: true,
     logger,
   });
 
@@ -340,6 +353,36 @@ export function createContainer(config, overrides = {}) {
     logger,
   });
 
+  // 异步唤醒回推：后台任务跑完 → Hermes 自投递唤醒轮 → 这里轮询 transcript 取回 → QQ。
+  // 只读 Hermes 管理 API，不新开端口、不引入新的入站面；未启用时不跑定时器。
+  const hermesApi = overrides.hermesApi ?? new HermesSessionApi({
+    baseUrl: config.model.baseUrl,
+    apiKey: config.secrets.modelApiKey,
+    timeoutMs: config.wakeDelivery?.requestTimeoutMs,
+    logger,
+    fetchImpl,
+  });
+  // 异步完成通知的引用锚点：把"派发那条消息"的真实 message_id 记在 wakeCursorStore 里，
+  // wake-flow 投递完成通知时引用它。常驻订阅 message.sent（与面板无关，无开关）。
+  const replyAnchorTracker = new ReplyAnchorTracker({
+    config,
+    logger,
+    cursorStore: wakeCursorStore,
+  });
+  replyAnchorTracker.attach(eventBus);
+
+  const wakeFlow = new WakeFlow({
+    config,
+    logger,
+    sender,
+    pipeline,
+    hermesApi,
+    cursorStore: wakeCursorStore,
+    anchorTracker: replyAnchorTracker,
+    health,
+    modelRouter,
+  });
+
   const container = {
     config,
     logger,
@@ -362,6 +405,7 @@ export function createContainer(config, overrides = {}) {
     modelSessionStore,
     dedupStore,
     sendQueueStore,
+    wakeCursorStore,
     // adapters
     napcatApi,
     mediaIngestor,
@@ -371,6 +415,7 @@ export function createContainer(config, overrides = {}) {
     sender,
     modelAdapter,
     modelRouter,
+    hermesApi,
     // orchestration
     pipeline,
     contextFlow,
@@ -381,6 +426,8 @@ export function createContainer(config, overrides = {}) {
     memeMatcher,
     inboundFlow,
     fastAck,
+    wakeFlow,
+    replyAnchorTracker,
     mem0Ingestor,
     shadowRecorder,
   };

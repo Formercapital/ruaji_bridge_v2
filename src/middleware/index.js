@@ -15,6 +15,12 @@ import { createMediaExtractMiddleware } from './media-extract.js';
 import { createResultDecorateMiddleware } from './result-decorate.js';
 
 export const RESPONSE_TRANSFORM = 'response.transform';
+/**
+ * 唤醒回推专用管线：Hermes 后台任务完成通知（由 wake-flow 投递）。
+ * 只要「脱 Markdown + 拟人节流」—— 好感度/评分/表情包/宿主修饰那几个中间件都挂在
+ * 「用户这一轮说了什么」上，而唤醒通知没有 inbound 轮次，跑了会写脏数据。
+ */
+export const RESPONSE_NOTICE = 'response.notice';
 
 /**
  * @param {object} deps
@@ -66,6 +72,15 @@ export function buildMiddlewarePipeline(deps) {
     'typing-delay',
   ];
   pipeline.configure(RESPONSE_TRANSFORM, order);
+
+  // 唤醒回推管线：剥离好感度/关系标签 + 脱 Markdown + 拟人节流。
+  // 不跑 affection/meme/result-decorate，防无 inbound 轮次写脏好感度或错误调用宿主修饰。
+  const noticeOrder = config.pipelines?.[RESPONSE_NOTICE] ?? [
+    'favour-tags',
+    'strip-markdown',
+    'typing-delay',
+  ];
+  pipeline.configure(RESPONSE_NOTICE, noticeOrder);
 
   return pipeline;
 }

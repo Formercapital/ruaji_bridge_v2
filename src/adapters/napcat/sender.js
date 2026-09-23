@@ -334,6 +334,11 @@ export class Sender {
             replyId: result.replyId ?? null,
             error: result.error ?? null,
             latencyMs: result.latencyMs ?? 0,
+            /** 出站来源与轮次身份：reply-anchor 订阅者靠它决定要不要/能不能记引用锚点 */
+            origin: task.metadata?.origin ?? null,
+            turnId: task.metadata?.turnId ?? task.correlationId ?? null,
+            isFirst: task.metadata?.isFirst === true,
+            fastAck: task.metadata?.fastAck === true,
           },
         }),
       );

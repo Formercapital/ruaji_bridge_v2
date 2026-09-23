@@ -38,6 +38,82 @@ const DEFAULTS = {
     maxRetries: 0,
   },
   wake: { mode: 'both', namePattern: '(^|[\\s，,。.!！?？~、；;:：])瑞姬' },
+  /**
+   * 异步唤醒回推（Hermes 后台任务跑完 → 自动推回 QQ）。
+   *
+   * Hermes 的 API Server 是无状态 HTTP 通道（gateway/platforms/api_server.py:
+   * supports_async_delivery=False），没有 push 能力。打通方式是「唤醒自投递 + 持久化
+   * transcript 回读」：Hermes 侧开启 async_delivery 后，terminal(background=true,
+   * notify_on_complete=true)/异步委派 的完成通知会由 Hermes 自投递唤醒轮写回同一个
+   * 会话 transcript（见 gateway/wake.py 的 _self_post_chat_completion），本桥接按
+   * wakeDelivery.pollIntervalMs 轮询 GET /api/sessions/{id}/messages 取回并推给 QQ。
+   *
+   * enabled 需要两侧同时满足：这里的开关 + Hermes 端
+   * `platforms.api_server.extra.async_delivery: true`（或 API_SERVER_ASYNC_DELIVERY=1）。
+   * 只读轮询，不额外开端口、不引入新的入站面。
+   */
+  wakeDelivery: {
+    enabled: false,
+    /** 轮询间隔。3s ≈ 「任务结束到 QQ 收到」的端到端延迟上界 */
+    pollIntervalMs: 3000,
+    /** Hermes 管理 API 单次请求超时 */
+    requestTimeoutMs: 8000,
+    /** GET /api/sessions 的会话数上限（本桥接只关心 qq_ 前缀的会话） */
+    maxSessions: 200,
+    /** 单次 GET /api/sessions/{id}/messages 的返回条数上限 */
+    messagePageLimit: 500,
+    /** 超过这个年龄的分体通知不再投递（防重启后补发几小时前的旧结果） */
+    maxAgeMs: 1800000,
+    /** 唤醒块迟迟没有 assistant 回复时的兜底提示阈值；<=0 关闭兜底 */
+    fallbackAfterMs: 600000,
+    fallbackNotice: '⚠️ 后台任务已结束，但瑞姬没能生成回复内容\n{notice}',
+    /** 游标与已投递记录保留天数 */
+    retainDays: 7,
+    /** 只处理 Hermes 会话表里 source 为该值的会话 */
+    source: 'api_server',
+    /**
+     * 引用锚点：异步完成通知自动引用「当初那条派发消息」。
+     * 派发回复发出后，sender 拿到 NapCat 返回的真实 message_id，由
+     * orchestration/reply-anchor-tracker.js 按 strategy 选段并记入
+     * WakeCursorStore.anchors[契约会话 id]；wake-flow 投递完成通知时取出填进
+     * metadata.replyToMessageId（→ 前置 [CQ:reply,id=…]），引用一次后清空。
+     *   strategy: auto  派发标记段优先，否则本轮首条发送成功的分段（默认，推荐）
+     *             first 固定本轮首段
+     *             last  固定本轮末段
+     *   markers:  optional，正则字符串数组；不写用内置默认（中英派发说法），
+     *             显式给 [] 则完全不认标记、一律走首/末段
+     *   maxAgeMs: 超过这个年龄的锚点不再引用（0 = 不限制）。默认给到 6 小时：
+     *             后台任务跑几十分钟到几小时很常见，而通知本身的时戳是新的
+     *             （不受 wakeDelivery.maxAgeMs 约束），锚点太短就会白记；
+     *             引用一次即消费，再配上这个上限就不会无限引用陈旧消息。
+     */
+    anchor: {
+      enabled: true,
+      strategy: 'auto',
+      maxAgeMs: 21600000,
+    },
+    /**
+     * 异步委派完成行（delegate_task background=true）的转述桥。
+     *
+     * Hermes 对委派完成**不会**起唤醒轮：它只在 transcript 里落一条
+     * display_kind=async_delegation_complete 的内部重注入信封（写给 agent 的，不是
+     * 给群友看的），下一轮交给客户端。所以桥接自己以同一会话自投递一次唤醒轮
+     * （hermes_wake_turn=true），让模型用它自己的口吻转述；内部汇报行本身永不投递。
+     * 关闭（enabled=false）后就只剩 fallbackNotice 兜底，委派结果不再自动回推。
+     *   graceMs:         完成行落地后先等一小会儿（若 Hermes 侧自己写了 assistant 回复就不唤醒）
+     *   maxAttempts:     唤醒失败的重试次数上限（超过就交给 fallbackNotice）
+     *   retryCooldownMs: 两次唤醒尝试之间的最小间隔
+     *   prompt:          唤醒提示词模板（可选）。模板里的 {ref} 替换为 deleg id；
+     *                    **绝不要把 {notice} 当成正文占位符** —— 原生报告已在会话上下文里，
+     *                    再内嵌一份会让同一份报告堆两份。未配置时用 wake-flow 的极简默认词。
+     */
+    delegationRelay: {
+      enabled: true,
+      graceMs: 5000,
+      maxAttempts: 3,
+      retryCooldownMs: 60000,
+    },
+  },
   decision: {
     capability: 'decision.group_reply',
     /**
@@ -78,7 +154,22 @@ const DEFAULTS = {
       notice: '瑞姬去休息啦，{minutes}分钟再来找她吧',
     },
   },
-  context: { totalCharacterBudget: 12000, perSourceCharacterBudget: 4000, collectTimeoutMs: 5000 },
+  /**
+   * 上下文与 Prompt 组装。
+   *
+   * directMediaParts: 本轮落盘的图片是否直接以 image_url 多模态 parts 挂进模型
+   * 请求。默认 true（保持旧行为）。置 false 时不再推 image_url，只在文本里给出
+   * 本地绝对路径 + 归属说明牌 + 「需要时调 vision_analyze」提示，由模型按需主动
+   * 读图。用于规避主模型输入端的内容安全拦截：图片直传进上下文会在 Google 等
+   * provider 侧触发 Generative AI Prohibited Use 策略而让整轮回复失败，而工具
+   * 返回的图片分析结果不受输入端策略约束。热生效（渲染时现读 config）。
+   */
+  context: {
+    totalCharacterBudget: 12000,
+    perSourceCharacterBudget: 4000,
+    collectTimeoutMs: 5000,
+    directMediaParts: true,
+  },
   reply: {
     sendEnabled: true,
     sideEffectsEnabled: true,
@@ -177,6 +268,12 @@ const DEFAULTS = {
   },
   pipelines: {
     'response.transform': ['favour-tags', 'affection', 'media-extract', 'meme', 'strip-markdown', 'typing-delay'],
+    /**
+     * 唤醒回推专用管线：只要「脱 Markdown + 拟人节流」。
+     * 不能复用 response.transform —— 好感度/评分/表情包那几个中间件都挂在
+     * 「用户这一轮说了什么」上，唤醒通知没有 inbound 轮次，跑了会写脏数据。
+     */
+    'response.notice': ['strip-markdown', 'typing-delay'],
   },
   plugins: [],
 };
@@ -214,6 +311,10 @@ const ENV_OVERRIDES = [
   ['RUAJI_V2_WEB_ENABLED', 'web.enabled', toBool],
   ['RUAJI_V2_WEB_PORT', 'web.port', Number],
   ['RUAJI_V2_UNIFIED_HOST_URL', 'unifiedHost.baseUrl', String],
+  ['RUAJI_V2_WAKE_DELIVERY_ENABLED', 'wakeDelivery.enabled', toBool],
+  ['RUAJI_V2_WAKE_DELIVERY_POLL_MS', 'wakeDelivery.pollIntervalMs', Number],
+  ['RUAJI_V2_WAKE_DELIVERY_MAX_AGE_MS', 'wakeDelivery.maxAgeMs', Number],
+  ['RUAJI_V2_WAKE_DELEGATION_RELAY', 'wakeDelivery.delegationRelay.enabled', toBool],
   ['RUAJI_V2_MEM0_ENABLED', 'mem0.enabled', toBool],
   ['RUAJI_V2_MEM0_BASE_URL', 'mem0.baseUrl', String],
   ['RUAJI_V2_MEM0_FILTER_FILE', 'mem0.filterFile', String],
@@ -320,6 +421,27 @@ function validate(config) {
   if (!config.napcat.wsUrl) errors.push('napcat.wsUrl 缺失');
   if (!config.napcat.httpUrl) errors.push('napcat.httpUrl 缺失');
   if (!config.model.baseUrl) errors.push('model.baseUrl 缺失');
+  if (config.wakeDelivery) {
+    const wd = config.wakeDelivery;
+    if (wd.enabled && !(Number(wd.pollIntervalMs) >= 500)) {
+      errors.push(`wakeDelivery.pollIntervalMs 非法: ${wd.pollIntervalMs}（应为 >= 500 的毫秒数）`);
+    }
+    if (wd.maxAgeMs != null && !(Number(wd.maxAgeMs) >= 0)) {
+      errors.push(`wakeDelivery.maxAgeMs 非法: ${wd.maxAgeMs}（应为 >= 0 的毫秒数，0 = 不限制）`);
+    }
+    const anchor = wd.anchor;
+    if (anchor) {
+      if (anchor.strategy != null && !['auto', 'first', 'last'].includes(anchor.strategy)) {
+        errors.push(`wakeDelivery.anchor.strategy 非法: ${anchor.strategy}（应为 auto | first | last）`);
+      }
+      if (anchor.maxAgeMs != null && !(Number(anchor.maxAgeMs) >= 0)) {
+        errors.push(`wakeDelivery.anchor.maxAgeMs 非法: ${anchor.maxAgeMs}（应为 >= 0 的毫秒数，0 = 不限制）`);
+      }
+      if (anchor.markers != null && !Array.isArray(anchor.markers)) {
+        errors.push('wakeDelivery.anchor.markers 非法（应为正则字符串数组）');
+      }
+    }
+  }
   if (!config.model.model) errors.push('model.model 缺失');
   if (config.model.sessionCutoffHour != null) {
     const h = Number(config.model.sessionCutoffHour);

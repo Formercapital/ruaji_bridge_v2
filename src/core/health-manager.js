@@ -39,6 +39,18 @@ export class HealthManager {
       model: { lastSuccessAt: null, consecutiveFailures: 0, totalRequests: 0, totalTimeouts: 0 },
       queue: { size: 0, maxSize: 0, processed: 0, failed: 0 },
       messages: { received: 0, replied: 0, ignored: 0, sent: 0, failed: 0 },
+      /** 异步唤醒回推（wake-flow）：轮询计数、投递数、最近错误 */
+      wakeDelivery: {
+        enabled: false,
+        pollIntervalMs: 0,
+        pollCount: 0,
+        delivered: 0,
+        delegationRelay: 0,
+        failed: 0,
+        lastPollAt: null,
+        lastError: null,
+        lastErrorAt: null,
+      },
     };
   }
 
@@ -80,6 +92,9 @@ export class HealthManager {
       websocket: { ...ws },
       napcat: { ...this.state.napcat, httpUrl: this.config.napcat.httpUrl },
       model: { ...model, baseUrl: this.config.model.baseUrl, model: this.config.model.model },
+      // 唤醒回推依赖 Hermes 管理 API（同一个 api_server），单独报出来
+      // 才能区分「任务没完成」和「唤醒了但没取回来」
+      wakeDelivery: { ...this.state.wakeDelivery },
     };
   }
 

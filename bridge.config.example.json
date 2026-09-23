@@ -50,6 +50,29 @@
     "namePattern": "(^|[\\s，,。.!！?？~、；;:：])BOT_NAME"
   },
 
+  "wakeDelivery": {
+    "enabled": false,
+    "pollIntervalMs": 3000,
+    "requestTimeoutMs": 8000,
+    "maxSessions": 200,
+    "messagePageLimit": 500,
+    "maxAgeMs": 1800000,
+    "fallbackAfterMs": 600000,
+    "fallbackNotice": "⚠️ 后台任务已结束，但瑞姬没能生成回复内容\n{notice}",
+    "retainDays": 7,
+    "source": "api_server",
+    "anchor": {
+      "enabled": true,
+      "strategy": "auto",
+      "maxAgeMs": 21600000
+    },
+    "delegationRelay": {
+      "enabled": true,
+      "graceMs": 5000,
+      "maxAttempts": 3,
+      "retryCooldownMs": 60000
+    }
+  },
   "decision": {
     "capability": "decision.group_reply",
     "rateLimit": { "maxReplies": 5, "windowMs": 300000, "applyToPrivate": false },
@@ -66,7 +89,8 @@
   "context": {
     "totalCharacterBudget": 12000,
     "perSourceCharacterBudget": 4000,
-    "collectTimeoutMs": 2500
+    "collectTimeoutMs": 2500,
+    "directMediaParts": true
   },
 
   "reply": {
@@ -163,7 +187,8 @@
   },
 
   "pipelines": {
-    "response.transform": ["favour-tags", "affection", "media-extract", "meme", "strip-markdown", "typing-delay"]
+    "response.transform": ["favour-tags", "affection", "media-extract", "meme", "strip-markdown", "typing-delay"],
+    "response.notice": ["strip-markdown", "typing-delay"]
   },
 
   "plugins": [

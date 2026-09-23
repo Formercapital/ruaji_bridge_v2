@@ -174,8 +174,11 @@ export class OpenAiCompatibleAdapter {
 
     const headers = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-    if (this.sessionHeader && modelRequest.sessionKey) {
-      headers[this.sessionHeader] = this.getSessionId(modelRequest.sessionKey);
+    if (this.sessionHeader) {
+      // sessionOverrideId：直接对指定上游会话发轮次（唤醒自投递），不走 sessionKey 派生
+      const upstreamSessionId = modelRequest.sessionOverrideId
+        || (modelRequest.sessionKey ? this.getSessionId(modelRequest.sessionKey) : null);
+      if (upstreamSessionId) headers[this.sessionHeader] = upstreamSessionId;
     }
 
     const body = {

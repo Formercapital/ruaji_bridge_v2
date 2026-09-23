@@ -560,6 +560,39 @@ test('非法 sessionRotationsPerDay 回落为 1（tag 无周期后缀）', () =>
   assert.equal(adapter.getSessionId('group_1', t), 'qq_group_1_20260828');
 });
 
+test('sessionOverrideId 优先于 sessionKey 派生（唤醒自投递钉住已有会话）', async () => {
+  const seen = [];
+  const adapter = new OpenAiCompatibleAdapter({
+    baseUrl: 'http://127.0.0.1:8642/v1',
+    model: 'hermes-agent',
+    sessionPrefix: 'qq_',
+    sessionHeader: 'X-Hermes-Session-Id',
+    fetchImpl: async (url, init) => {
+      seen.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'r1', choices: [{ message: { content: 'ok' } }], usage: {} }),
+        text: async () => '',
+      };
+    },
+  });
+
+  await adapter.generate({
+    correlationId: 'c1',
+    model: 'hermes-agent',
+    messages: [{ role: 'user', content: 'hi' }],
+    sessionKey: 'group_1',
+    sessionOverrideId: 'qq_group_1_20260922_1',
+    stream: false,
+    generation: { hermes_wake_turn: true },
+  });
+
+  assert.equal(seen[0].headers['X-Hermes-Session-Id'], 'qq_group_1_20260922_1');
+  assert.equal(seen[0].body.hermes_wake_turn, true, '唤醒轮标记必须随请求体发出');
+  assert.equal(seen[0].body.stream, false);
+});
+
 test('ModelSessionStore 兼容周期后缀 tag：解析成功且不被 prune 当脏数据', () => {
   const tmpCacheDir = path.join(ROOT, 'tests', 'fixtures', `tmp_cache_rotations_${Date.now()}`);
   const store = new ModelSessionStore({ cacheDir: tmpCacheDir, retainDays: 2 });
