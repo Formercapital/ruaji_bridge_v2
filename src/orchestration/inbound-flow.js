@@ -221,7 +221,8 @@ export class InboundFlow {
     // 好感度的"见过这个人"记录（仅旧体系）。Favour 模式下旧存储全面停写——
     // 互动时间由插件结算路径自己维护（合同第 7 条）。
     const legacyAffectionActive =
-      !this.config.favourUltraEnabled || this.config.legacyAffectionEnabled === true;
+      this.config.legacyAffectionEnabled === true ||
+      ((this.config.legacyAffectionEnabled !== false) && !this.config.favourUltraEnabled);
     if (this.config.reply.sideEffectsEnabled && legacyAffectionActive) {
       try {
         this.affection.onUserMessage({ uid: inbound.userId, nickname: inbound.sender.displayName });
@@ -508,6 +509,8 @@ export class InboundFlow {
           userId: inbound.userId,
           groupId: inbound.groupId,
           messageType: inbound.messageType,
+          isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+          is_private: inbound.messageType === MESSAGE_TYPES.PRIVATE,
           rawMessage: inbound.rawMessage,
           text: inbound.text,
           content: inbound.content,
@@ -771,7 +774,11 @@ export class InboundFlow {
     if (!Array.isArray(whitelist) || whitelist.length === 0) {
       return false;
     }
-    return whitelist.map((id) => String(id).trim()).includes(uid);
+    const normalized = whitelist.map((id) => String(id).trim());
+    if (normalized.includes('*')) {
+      return true;
+    }
+    return normalized.includes(uid);
   }
 
   /**

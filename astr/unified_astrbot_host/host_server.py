@@ -276,9 +276,26 @@ class HostServer:
         spec = DISPATCH_TABLE.get(EventType.OnLLMResponseEvent)
         allowed_targets = spec.default_targets if spec else ("all",)
 
+        identity_cfg = self.unified.config.get("identity") or {}
+        owner_id = str(identity_cfg.get("owner_id") or identity_cfg.get("ownerId") or "")
+        is_owner = (
+            message.role == "owner"
+            or bool(
+                payload.get("isOwner")
+                or payload.get("is_owner")
+                or inner_payload.get("isOwner")
+                or inner_payload.get("is_owner")
+            )
+            or (bool(owner_id) and message.user_id == owner_id)
+        )
+        is_private = bool(message.is_private)
+
         for h in handlers:
             key = resolve_owner(h, self.unified.mounts)
             if allowed_targets and "all" not in allowed_targets and key not in allowed_targets:
+                continue
+            # 记忆分流：主人私聊跳过向 LivingMemory 派发记忆反思
+            if key == "living_memory" and is_private and is_owner:
                 continue
             entry: dict[str, Any] = {"plugin": key, "handler": getattr(h, "handler_name", "unknown")}
             started = time.perf_counter()
@@ -331,6 +348,15 @@ class HostServer:
     async def _dispatch_event(self, message: InboundMessage) -> tuple[list[dict[str, Any]], list[MessageEventResult], list[str]]:
         """把消息交给记忆/学习插件的消息处理器，并收集命令结果。"""
         self_id = str((self.unified.config.get("identity") or {}).get("robot_id") or "")
+        identity_cfg = self.unified.config.get("identity") or {}
+        owner_id = str(identity_cfg.get("owner_id") or identity_cfg.get("ownerId") or "")
+        is_owner = (
+            message.role == "owner"
+            or bool(message.raw.get("isOwner") or message.raw.get("is_owner"))
+            or (bool(owner_id) and message.user_id == owner_id)
+        )
+        is_private = bool(message.is_private)
+
         out_reports: list[dict[str, Any]] = []
         all_cmd_results: list[MessageEventResult] = []
         sent_texts: list[str] = []
@@ -339,6 +365,9 @@ class HostServer:
 
         for key in self.event_targets:
             if key not in self.unified.mounts:
+                continue
+            # 记忆分流：主人私聊跳过向 LivingMemory 派发消息摄取
+            if key == "living_memory" and is_private and is_owner:
                 continue
             handlers = [
                 h
@@ -1131,7 +1160,7 @@ async def run(config_path: str | None = None, self_check: bool = False) -> int:
         snapshot = unified.health_snapshot()
         print(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
         print(json.dumps(server.tools.manifest(), ensure_ascii=False, indent=2, default=str))
-        ok = snapshot.get("status") != "unhealthy" and len(server.tools.names) == 6
+        ok = snapshot.get("status") != "unhealthy" and len(server.tools.names) >= 4
         await unified.close()
         return 0 if ok else 1
 

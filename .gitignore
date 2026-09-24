@@ -80,3 +80,4 @@ astr/unified_astrbot_host/tests/
 # ==========================================
 start_mem0.*
 __pycache__/
+*.lnk

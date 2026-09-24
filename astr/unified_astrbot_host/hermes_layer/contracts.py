@@ -137,7 +137,11 @@ class InboundMessage:
             text=str(text),
             content=content,
             self_id=sid("selfId", "self_id", "robotId", "robot_id"),
-            is_private=sbool("isPrivate", "is_private", "private"),
+            is_private=(
+                sbool("isPrivate", "is_private", "private")
+                or payload.get("message_type") == "private"
+                or payload.get("messageType") == "private"
+            ),
             at_bot=sbool("isAtBot", "is_at_bot", "atBot", "at_bot"),
             reply_to=sid("replyTo", "reply_to"),
             role=str(payload.get("role") or "member"),

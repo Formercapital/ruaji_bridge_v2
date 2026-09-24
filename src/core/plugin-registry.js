@@ -32,6 +32,7 @@ export class PluginRegistry {
   constructor(opts = {}) {
     this.eventBus = opts.eventBus;
     this.capabilityBus = opts.capabilityBus;
+    this.config = opts.config ?? null;
     this.log = opts.logger?.child({ component: 'plugin-registry' }) ?? console;
     this.fetchImpl = opts.fetchImpl;
     /** id -> { manifest, client, unsubscribes[] } */
@@ -84,6 +85,29 @@ export class PluginRegistry {
       async (envelope) => {
         if (!matchesCondition(sub.when, envelope.payload)) return;
         if (manifest.transport !== 'http') return;
+
+        // 记忆分流：LivingMemory 仅摄取群聊和非主人私聊；主人私聊专享 Mem0，跳过向 LivingMemory 投递
+        if (manifest.id === 'living-memory') {
+          const payload = envelope?.payload ?? {};
+          const isPrivate =
+            payload.isPrivate === true ||
+            payload.is_private === true ||
+            payload.messageType === 'private';
+          const ownerId = String(this.config?.identity?.ownerId ?? '').trim();
+          const userId = String(payload.userId ?? payload.user_id ?? '').trim();
+          const isOwner =
+            payload.isOwner === true ||
+            payload.is_owner === true ||
+            (ownerId !== '' && userId === ownerId);
+
+          if (isPrivate && isOwner) {
+            this.log.debug?.('LivingMemory 订阅跳过主人私聊事件', {
+              event: envelope.event,
+              userId,
+            });
+            return;
+          }
+        }
 
         const body = sub.body
           ? resolveTemplate(sub.body, envelope.payload)

@@ -248,6 +248,9 @@ export class ReplyFlow {
         userName: inbound.sender.displayName,
         messageType: inbound.messageType,
         isPrivate: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+        is_private: inbound.messageType === MESSAGE_TYPES.PRIVATE,
+        isOwner: inbound.flags?.isOwner === true,
+        is_owner: inbound.flags?.isOwner === true,
         /** 触发类型随事件透传：宿主侧 Favour 据此豁免主动插话轮的标签解析 */
         triggerType,
         /** 用户这一轮说了什么。`text` 已经被占用为模型回复，别再复用它 */

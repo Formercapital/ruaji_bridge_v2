@@ -69,7 +69,7 @@ export function createContainer(config, overrides = {}) {
   const idempotency = new IdempotencyStore();
   const eventBus = new EventBus({ logger, idempotency });
   const capabilityBus = new CapabilityBus({ logger });
-  const pluginRegistry = new PluginRegistry({ eventBus, capabilityBus, logger, fetchImpl });
+  const pluginRegistry = new PluginRegistry({ eventBus, capabilityBus, logger, fetchImpl, config });
   const health = new HealthManager({ config, logger, pluginRegistry });
 
   // 运维面板的追踪采集器。构造总是发生（一个环形缓冲，成本可忽略），

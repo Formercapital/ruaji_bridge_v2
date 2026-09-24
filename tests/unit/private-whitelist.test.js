@@ -420,3 +420,37 @@ test('私聊白名单：热更新 config.identity.privateWhitelist 后立即生�
   assert.ok(receivedEvent, '加白之后同一用户应立刻放行');
   assert.equal(receivedEvent.payload.userId, '888888888');
 });
+
+test('私聊白名单：包含 "*" 时放行所有好友私聊', async () => {
+  const { inboundFlow, eventBus } = createTestInboundFlow({
+    identity: {
+      ownerId: '10000001',
+      robotId: '398276230',
+      privateWhitelist: ['10000001', '*'],
+    },
+  });
+
+  let receivedEvent = null;
+  eventBus.subscribe('message.received', 'test-sub-wildcard', async (e) => {
+    receivedEvent = e;
+  });
+
+  const rawEvent = {
+    post_type: 'message',
+    message_type: 'private',
+    sub_type: 'friend',
+    message_id: 10020,
+    user_id: 777777777, // 任意陌生好友
+    self_id: 398276230,
+    raw_message: '你好，通配符放行测试',
+    time: Math.floor(Date.now() / 1000),
+    sender: { user_id: 777777777, nickname: '通配符好友' },
+  };
+
+  await inboundFlow.handleEvent(rawEvent);
+  await flush();
+
+  assert.ok(receivedEvent, '包含 "*" 时应放行所有好友私聊');
+  assert.equal(receivedEvent.payload.userId, '777777777');
+  assert.equal(inboundFlow._isPrivateAllowed('any_random_user'), true, '直接函数调用也应返回 true');
+});
